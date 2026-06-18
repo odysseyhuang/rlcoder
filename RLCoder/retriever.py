@@ -4,6 +4,7 @@ from transformers import AutoTokenizer, AutoModel
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from datasets import CodeBlock
+from utils.model_utils import resolve_model_path
 
 
 def tokenize(text, tokenizer, max_length, is_query, extracted_import=''):
@@ -67,10 +68,11 @@ class Retriever(nn.Module):
     """
     def __init__(self, args):
         super(Retriever, self).__init__()
-        self.tokenizer = AutoTokenizer.from_pretrained(args.retriever_model_path)
+        retriever_model_path = resolve_model_path(args.retriever_model_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(retriever_model_path, local_files_only=True)
         self.args = args
         if self.args.disable_retriever is False:
-            self.model = AutoModel.from_pretrained(args.retriever_model_path)
+            self.model = AutoModel.from_pretrained(retriever_model_path, local_files_only=True)
             self.model = torch.nn.DataParallel(self.model).cuda()
             self.model.eval()
 

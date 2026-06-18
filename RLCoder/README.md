@@ -7,7 +7,7 @@
 > In this paper, we introduce a reinforcement learning framework for repository-level code completion. 
 > The core module, RLRetriever, is a retriever that can disregard seemingly useful yet ultimately useless reference code snippets, focusing instead on those more likely to contribute to accurate code generation.
 
-**🔧 Models:** The trained `RLRetriever` is available at [RLRetriever](https://huggingface.co/nov3630/RLCoder).
+**🔧 Models:** Put local models and checkpoints under `models/`, for example `models/deepseek-coder-6.7b-base`, `models/unixcoder-base`, and `models/RLRetriever`.
 
 **📦 Datasets:** Download the training and evaluation datasets from [Data4RLCoder](https://huggingface.co/datasets/nov3630/Data4RLCoder) to the `/data` folder.
 
@@ -76,7 +76,7 @@ python main.py \
     --enable_generation \
     --enable_repocoder \
     --inference_type unixcoder_with_rl \
-    --rlcoder_model_path 'nov3630/RLRetriever' \ # path to trained RLCoder, eg. 'result/RLCoder/retriever_cpkt/result_0'
+    --rlcoder_model_path 'models/RLRetriever' \ # path to trained RLCoder, eg. 'result/RLCoder/retriever_cpkt/result_0'
     --output_dir result/RepoCoder_rl \
     2>&1|tee log/RepoCoder_rl.log
 ```
@@ -111,7 +111,7 @@ python main.py \
     --weighted_keywords \
     --enable_generation \
     --inference_type unixcoder \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
+    --generator_model_path models/deepseek-coder-6.7b-base \
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
     --generator_batch_size_per_gpu 16 \
@@ -125,8 +125,8 @@ python main.py \
     --enable_generation \
     --enable_repocoder \
     --inference_type unixcoder_with_rl \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
-    --rlcoder_model_path 'microsoft/unixcoder-base' \
+    --generator_model_path models/deepseek-coder-6.7b-base \
+    --rlcoder_model_path 'models/unixcoder-base' \
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
     --generator_batch_size_per_gpu 16 \
@@ -139,8 +139,8 @@ python main.py \
     --weighted_keywords \
     --enable_generation \
     --inference_type unixcoder_with_rl \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
-    --retriever_model_path 'nov3630/RLRetriever' \ # path to trained RLCoder, eg. 'result/RLCoder/retriever_cpkt/result_0'
+    --generator_model_path models/deepseek-coder-6.7b-base \
+    --retriever_model_path 'models/RLRetriever' \ # path to trained RLCoder, eg. 'result/RLCoder/retriever_cpkt/result_0'
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
     --generator_batch_size_per_gpu 16 \
@@ -148,7 +148,7 @@ python main.py \
     2>&1|tee log_infer/RLCoder_deepseekcoder_7b_crossfile_1536_infile_512.log
 ```
 
-For other backbone LLMs, replace `deepseek-ai/deepseek-coder-6.7b-base` above to `deepseek-ai/deepseek-coder-1.3b-base`, `bigcode/starcoderbase-7b`, `bigcode/starcoder2-7b` and `codellama/CodeLlama-7b-hf`, respectively.
+For other backbone LLMs, replace `models/deepseek-coder-6.7b-base` above with the corresponding local model directory under `models/`.
 
 
 ### RQ2
@@ -162,7 +162,7 @@ python main.py \
     --weighted_keywords \
     --enable_generation \
     --inference_type baseline \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
+    --generator_model_path models/deepseek-coder-6.7b-base \
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
     --generator_batch_size_per_gpu 16 \
@@ -177,7 +177,7 @@ python main.py \
     --weighted_keywords \
     --enable_generation \
     --inference_type BM25 \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
+    --generator_model_path models/deepseek-coder-6.7b-base \
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
     --generator_batch_size_per_gpu 16 \
@@ -192,7 +192,7 @@ python main.py \
     --weighted_keywords \
     --enable_generation \
     --inference_type UniXcoder \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
+    --generator_model_path models/deepseek-coder-6.7b-base \
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
     --generator_batch_size_per_gpu 16 \
@@ -207,7 +207,7 @@ python main.py \
     --weighted_keywords \
     --enable_generation \
     --inference_type unixcoder_with_rl \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
+    --generator_model_path models/deepseek-coder-6.7b-base \
     --retriever_model_path '' \ # path to trained UniXcoder-SFT, eg. 'result/SFT/retriever_cpkt/result_0'
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
@@ -223,8 +223,8 @@ python main.py \
     --weighted_keywords \
     --enable_generation \
     --inference_type unixcoder_with_rl \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
-    --retriever_model_path 'nov3630/RLRetriever' \ # path to trained RLCoder, eg. 'result/RLCoder/retriever_cpkt/result_0'
+    --generator_model_path models/deepseek-coder-6.7b-base \
+    --retriever_model_path 'models/RLRetriever' \ # path to trained RLCoder, eg. 'result/RLCoder/retriever_cpkt/result_0'
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
     --generator_batch_size_per_gpu 16 \
@@ -244,7 +244,7 @@ python main.py \
     --weighted_keywords \
     --enable_generation \
     --inference_type unixcoder \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
+    --generator_model_path models/deepseek-coder-6.7b-base \
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
     --generator_batch_size_per_gpu 16 \
@@ -258,7 +258,7 @@ python main.py \
     --eval \
     --enable_generation \
     --inference_type unixcoder_with_rl \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
+    --generator_model_path models/deepseek-coder-6.7b-base \
     --retriever_model_path '' \ # path to trained RLCoder, eg. 'result/Ablation_weight/retriever_cpkt/result_0'
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
@@ -275,7 +275,7 @@ python main.py \
     --enable_generation \
     --enable_fixed_block \
     --inference_type unixcoder_with_rl \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
+    --generator_model_path models/deepseek-coder-6.7b-base \
     --retriever_model_path '' \ # path to trained RLCoder, eg. 'result/Ablation_candidate/retriever_cpkt/result_0'
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
@@ -292,7 +292,7 @@ python main.py \
     --enable_generation \
     --disable_stop_block \
     --inference_type unixcoder_with_rl \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
+    --generator_model_path models/deepseek-coder-6.7b-base \
     --retriever_model_path '' \ # path to trained RLCoder, eg. 'result/Ablation_stop_signal/retriever_cpkt/result_0'
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
@@ -319,9 +319,9 @@ python main.py \
     --enable_generation \
     --enable_repocoder \
     --inference_type unixcoder_with_rl \
-    --generator_model_path deepseek-ai/deepseek-coder-6.7b-base \
+    --generator_model_path models/deepseek-coder-6.7b-base \
     --retriever_model_path '' \ # path to trained RepoCoder_rl, eg. 'result/RepoCoder_rl/retriever_cpkt/result_0'
-    --rlcoder_model_path 'nov3630/RLRetriever' \
+    --rlcoder_model_path 'models/RLRetriever' \
     --generator_max_crossfile_length 1536 \
     --generator_max_context_length 2048 \
     --generator_batch_size_per_gpu 16 \

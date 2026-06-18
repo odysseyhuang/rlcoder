@@ -16,6 +16,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from utils.eval_metric import compute_metric_stmt
 from utils.eval_codereval import eval_codereval
+from utils.model_utils import local_model_path
 from prettytable import PrettyTable
 import copy
 
@@ -470,14 +471,14 @@ def run(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--generator_model_path", default="deepseek-ai/deepseek-coder-1.3b-base", type=str, help="Generator model path")
+    parser.add_argument("--generator_model_path", default=local_model_path("deepseek-coder-6.7b-base"), type=str, help="Generator model path")
     parser.add_argument("--generator_batch_size_per_gpu", default=32, type=int, help="Generator batch size per GPU")
     parser.add_argument("--generator_max_crossfile_length", default=512, type=int, help="Maximum cross-file length for the generator")
     parser.add_argument("--generator_max_context_length", default=1024, type=int, help="Maximum context length for the generator")
     parser.add_argument("--generator_max_generation_length", default=64, type=int, help="Maximum generation length for the generator")
     parser.add_argument("--disable_generator", action="store_true", help="Disable the generator")
 
-    parser.add_argument("--retriever_model_path", default="microsoft/unixcoder-base", type=str, help="Retriever model path")
+    parser.add_argument("--retriever_model_path", default=local_model_path("unixcoder-base"), type=str, help="Retriever model path")
     parser.add_argument("--retriever_batch_size_per_gpu", default=64, type=int, help="Retriever batch size per GPU")
     parser.add_argument("--disable_retriever", action="store_true", help="Disable the retriever")
     parser.add_argument("--retriever_query_context_length", default=256, type=int, help="Retriever query context length")
@@ -497,7 +498,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable_stop_block", action="store_true", help="Disable the stop block")
 
     parser.add_argument("--enable_repocoder", action="store_true", help="Use the repocoder method during generation")
-    parser.add_argument("--rlcoder_model_path", default="microsoft/unixcoder-base", type=str, help="Stage 1 model for repocoder")
+    parser.add_argument("--rlcoder_model_path", default=local_model_path("unixcoder-base"), type=str, help="Stage 1 model for repocoder")
 
     parser.add_argument("--do_codereval", action="store_true", help="Execute codereval evaluation in docker")
     parser.add_argument("--enable_forward_generation", action="store_true", help="Use progressive generation methods during inference")

@@ -5,6 +5,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from tqdm import tqdm
 import numpy as np
 from utils.eval_utils import is_identifier
+from utils.model_utils import resolve_model_path
 import re
 
 class CustomDataset(Dataset):
@@ -71,7 +72,11 @@ class CustomDataset(Dataset):
 class Model(nn.Module):
     def __init__(self, generator_model_path, tokenizer, max_generation_length=64):
         super(Model, self).__init__()
-        self.base_model = AutoModelForCausalLM.from_pretrained(generator_model_path, torch_dtype=torch.float16)
+        self.base_model = AutoModelForCausalLM.from_pretrained(
+            resolve_model_path(generator_model_path),
+            torch_dtype=torch.float16,
+            local_files_only=True,
+        )
         self.tokenizer = tokenizer
         self.max_generation_length = max_generation_length
 
@@ -119,13 +124,14 @@ class Generator:
         args: Configuration parameters.
     """
     def __init__(self, args):
-        self.tokenizer = AutoTokenizer.from_pretrained(args.generator_model_path)
+        generator_model_path = resolve_model_path(args.generator_model_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(generator_model_path, local_files_only=True)
         self.tokenizer.model_max_length = 1e10
         if self.tokenizer.pad_token_id == None:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         if not args.disable_generator:
-            self.model = Model(args.generator_model_path, self.tokenizer)
+            self.model = Model(generator_model_path, self.tokenizer)
             self.model = torch.nn.DataParallel(self.model).cuda()
             self.model.eval()
 
