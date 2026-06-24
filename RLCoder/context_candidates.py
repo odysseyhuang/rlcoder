@@ -12,7 +12,7 @@ SOURCE_PRIORITY = {
 }
 
 
-def recall_multi_path_candidates(args, examples, bm25_index, query_bundles):
+def recall_multi_path_candidates(args, examples, bm25_index, query_bundles, base_topk=None):
     per_task_hits = [[] for _ in examples]
     source_counts = [Counter() for _ in examples]
 
@@ -35,7 +35,7 @@ def recall_multi_path_candidates(args, examples, bm25_index, query_bundles):
         source_results = bm25_index.query(
             task_ids,
             queries,
-            topk=getattr(args, "ucm_topk_per_path", 20),
+            topk=_topk_for_source(args, source, base_topk),
         )
         for idx, candidates in zip(batch_indices, source_results):
             source_counts[idx][source] += len(candidates)
@@ -127,12 +127,31 @@ def _query_for_source(bundle, source):
     return ""
 
 
+def _topk_for_source(args, source, base_topk):
+    if source == "base":
+        configured = getattr(args, "ucm_base_topk", 0)
+        if configured > 0:
+            return configured
+        if base_topk is not None:
+            return base_topk
+    if source == "path":
+        return getattr(args, "ucm_path_topk", 5)
+    return getattr(args, "ucm_topk_per_path", 10)
+
+
 def _candidate_sort_key(item):
     sources = item["sources"]
+    ranks = item["best_rank_by_source"]
+    best_rank = min(ranks.values())
+    source_bonus = -len(sources)
+
+    if "base" in ranks:
+        return (0, ranks["base"], source_bonus, best_rank)
+    if "draft" in ranks:
+        return (1, ranks["draft"], source_bonus, best_rank)
+
     best_source_priority = min(SOURCE_PRIORITY.get(source, 99) for source in sources)
-    best_rank = min(item["best_rank_by_source"].values())
-    base_or_draft_hit = 0 if sources.intersection({"base", "draft"}) else 1
-    return (-len(sources), base_or_draft_hit, best_source_priority, best_rank)
+    return (2, best_source_priority, best_rank, source_bonus)
 
 
 def _copy_with_multi_type(candidate, sources):

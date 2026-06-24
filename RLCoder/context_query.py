@@ -66,7 +66,7 @@ def build_query_bundle(args, example, base_query=None, draft_prediction=None, co
         views.append(QueryView("import_api", import_api_query))
 
     path_query = build_path_query(example.file_path)
-    if path_query:
+    if getattr(args, "ucm_enable_path_query", False) and path_query:
         views.append(QueryView("path", path_query))
 
     if draft_prediction:

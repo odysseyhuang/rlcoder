@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=rlcoder-ucm-debug
-#SBATCH --partition=gpu
+#SBATCH --partition=gpuA800
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -21,4 +21,4 @@ conda activate repocoder
 export TOKENIZERS_PARALLELISM=false
 export RUN_MODE="${RUN_MODE:-ucm_debug}"
 export PROJECT_DIR
-bash scripts/run_ucm_job.sh
+bash scripts/submit_ucm_a800.slurm

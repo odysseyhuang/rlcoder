@@ -103,6 +103,7 @@ def retrieve_codeblocks(args, examples, bm25, retriever, dataset_name, is_traini
                 examples,
                 bm25[dataset_name],
                 query_bundles,
+                base_topk=bm25_topk,
             )
         else:
             candidate_codeblocks = bm25[dataset_name].query([x.task_id for x in examples], queries, topk=bm25_topk)
@@ -549,8 +550,11 @@ if __name__ == "__main__":
 
     parser.add_argument("--enable_ucm", action="store_true", help="Enable UCM extensions")
     parser.add_argument("--enable_multi_path_retrieval", action="store_true", help="Enable UCM multi-path BM25 candidate recall")
-    parser.add_argument("--ucm_topk_per_path", default=20, type=int, help="Number of BM25 candidates per UCM query view")
-    parser.add_argument("--ucm_candidate_pool_size", default=100, type=int, help="Maximum merged UCM candidate pool size")
+    parser.add_argument("--ucm_base_topk", default=0, type=int, help="BM25 candidates for the base query; 0 keeps the original RLCoder topK")
+    parser.add_argument("--ucm_topk_per_path", default=10, type=int, help="Number of BM25 candidates per auxiliary UCM query view")
+    parser.add_argument("--ucm_path_topk", default=5, type=int, help="Number of BM25 candidates for the optional path query view")
+    parser.add_argument("--ucm_candidate_pool_size", default=120, type=int, help="Maximum merged UCM candidate pool size")
+    parser.add_argument("--ucm_enable_path_query", action="store_true", help="Enable the path-based UCM query view")
     parser.add_argument("--ucm_query_identifier_limit", default=64, type=int, help="Maximum identifier tokens in the UCM identifier query")
     parser.add_argument("--ucm_query_import_limit", default=32, type=int, help="Maximum import/API lines or tokens in the UCM import query")
     parser.add_argument("--ucm_trace_retrieval", action="store_true", help="Print UCM candidate recall trace")
