@@ -14,6 +14,7 @@ set -euo pipefail
 PROJECT_DIR="${PROJECT_DIR:-/share/home/202421045349/projects/RLCoder/RLCoder}"
 CONDA_ENV="${CONDA_ENV:-/share/home/202421045349/conda_envs/rlcoder}"
 RUN_MODE="${RUN_MODE:-ucm_debug}"
+UCM_RUN_TAG="${UCM_RUN_TAG:-}"
 
 RETRIEVER_MODEL="${RETRIEVER_MODEL:-./models/RLRetriever}"
 GENERATOR_MODEL="${GENERATOR_MODEL:-./models/deepseek-coder-6.7b-base}"
@@ -34,10 +35,25 @@ UCM_QUERY_IMPORT_LIMIT="${UCM_QUERY_IMPORT_LIMIT:-32}"
 cd "${PROJECT_DIR}"
 mkdir -p log_infer result_infer
 
+if [[ -n "${UCM_RUN_TAG}" && "${UCM_RUN_TAG}" =~ [^A-Za-z0-9._-] ]]; then
+  echo "Invalid UCM_RUN_TAG=${UCM_RUN_TAG}; use only letters, numbers, dot, underscore, or hyphen." >&2
+  exit 2
+fi
+
+make_output_dir() {
+  local base_dir="$1"
+  if [[ -n "${UCM_RUN_TAG}" ]]; then
+    printf "%s_%s" "${base_dir}" "${UCM_RUN_TAG}"
+  else
+    printf "%s" "${base_dir}"
+  fi
+}
+
 export TOKENIZERS_PARALLELISM=false
 
 echo "Job ID: ${SLURM_JOB_ID:-NA}"
 echo "Run mode: ${RUN_MODE}"
+echo "Run tag: ${UCM_RUN_TAG:-default}"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 echo "Project dir: ${PROJECT_DIR}"
@@ -74,7 +90,8 @@ fi
 
 case "${RUN_MODE}" in
   baseline_debug)
-    OUTPUT_DIR="result_infer/RLCoder_baseline_debug"
+    OUTPUT_DIR="$(make_output_dir "result_infer/RLCoder_baseline_debug")"
+    echo "Output dir: ${OUTPUT_DIR}"
     conda run -p "${CONDA_ENV}" python main.py \
       "${COMMON_ARGS[@]}" \
       --debug \
@@ -82,7 +99,8 @@ case "${RUN_MODE}" in
     ;;
 
   ucm_debug)
-    OUTPUT_DIR="result_infer/UCM_multipath_debug"
+    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_debug")"
+    echo "Output dir: ${OUTPUT_DIR}"
     conda run -p "${CONDA_ENV}" python main.py \
       "${COMMON_ARGS[@]}" \
       "${UCM_ARGS[@]}" \
@@ -92,7 +110,8 @@ case "${RUN_MODE}" in
     ;;
 
   ucm_repocoder_debug)
-    OUTPUT_DIR="result_infer/UCM_multipath_repocoder_debug"
+    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_repocoder_debug")"
+    echo "Output dir: ${OUTPUT_DIR}"
     conda run -p "${CONDA_ENV}" python main.py \
       "${COMMON_ARGS[@]}" \
       "${UCM_ARGS[@]}" \
@@ -104,7 +123,8 @@ case "${RUN_MODE}" in
     ;;
 
   ucm_full)
-    OUTPUT_DIR="result_infer/UCM_multipath_deepseekcoder_7b_crossfile_1536_infile_512"
+    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_deepseekcoder_7b_crossfile_1536_infile_512")"
+    echo "Output dir: ${OUTPUT_DIR}"
     conda run -p "${CONDA_ENV}" python main.py \
       "${COMMON_ARGS[@]}" \
       "${UCM_ARGS[@]}" \
