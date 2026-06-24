@@ -1,0 +1,112 @@
+#!/bin/bash
+#SBATCH --job-name=rlcoder_ucm
+#SBATCH --partition=gpuA800
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=6
+#SBATCH --gres=gpu:1
+#SBATCH --time=24:00:00
+#SBATCH --output=log_infer/%j_%x.out
+#SBATCH --error=log_infer/%j_%x.err
+
+set -euo pipefail
+
+PROJECT_DIR="${PROJECT_DIR:-/share/home/202421045349/projects/RLCoder/RLCoder}"
+CONDA_ENV="${CONDA_ENV:-/share/home/202421045349/conda_envs/rlcoder}"
+RUN_MODE="${RUN_MODE:-ucm_debug}"
+
+RETRIEVER_MODEL="${RETRIEVER_MODEL:-./models/RLRetriever}"
+GENERATOR_MODEL="${GENERATOR_MODEL:-./models/deepseek-coder-6.7b-base}"
+RLCODER_MODEL="${RLCODER_MODEL:-./models/unixcoder-base}"
+
+GENERATOR_BATCH_SIZE_PER_GPU="${GENERATOR_BATCH_SIZE_PER_GPU:-8}"
+RETRIEVER_BATCH_SIZE_PER_GPU="${RETRIEVER_BATCH_SIZE_PER_GPU:-32}"
+NUM_WORKERS="${NUM_WORKERS:-6}"
+
+UCM_TOPK_PER_PATH="${UCM_TOPK_PER_PATH:-20}"
+UCM_CANDIDATE_POOL_SIZE="${UCM_CANDIDATE_POOL_SIZE:-100}"
+UCM_QUERY_IDENTIFIER_LIMIT="${UCM_QUERY_IDENTIFIER_LIMIT:-64}"
+UCM_QUERY_IMPORT_LIMIT="${UCM_QUERY_IMPORT_LIMIT:-32}"
+
+cd "${PROJECT_DIR}"
+mkdir -p log_infer result_infer
+
+export TOKENIZERS_PARALLELISM=false
+
+echo "Job ID: ${SLURM_JOB_ID:-NA}"
+echo "Run mode: ${RUN_MODE}"
+echo "Node: $(hostname)"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
+echo "Project dir: ${PROJECT_DIR}"
+echo "Start time: $(date)"
+
+COMMON_ARGS=(
+  --eval
+  --weighted_keywords
+  --enable_generation
+  --inference_type unixcoder_with_rl
+  --retriever_model_path "${RETRIEVER_MODEL}"
+  --generator_model_path "${GENERATOR_MODEL}"
+  --generator_max_crossfile_length 1536
+  --generator_max_context_length 2048
+  --generator_batch_size_per_gpu "${GENERATOR_BATCH_SIZE_PER_GPU}"
+  --retriever_batch_size_per_gpu "${RETRIEVER_BATCH_SIZE_PER_GPU}"
+  --num_workers "${NUM_WORKERS}"
+)
+
+UCM_ARGS=(
+  --enable_ucm
+  --enable_multi_path_retrieval
+  --ucm_topk_per_path "${UCM_TOPK_PER_PATH}"
+  --ucm_candidate_pool_size "${UCM_CANDIDATE_POOL_SIZE}"
+  --ucm_query_identifier_limit "${UCM_QUERY_IDENTIFIER_LIMIT}"
+  --ucm_query_import_limit "${UCM_QUERY_IMPORT_LIMIT}"
+)
+
+case "${RUN_MODE}" in
+  baseline_debug)
+    OUTPUT_DIR="result_infer/RLCoder_baseline_debug"
+    conda run -p "${CONDA_ENV}" python main.py \
+      "${COMMON_ARGS[@]}" \
+      --debug \
+      --output_dir "${OUTPUT_DIR}"
+    ;;
+
+  ucm_debug)
+    OUTPUT_DIR="result_infer/UCM_multipath_debug"
+    conda run -p "${CONDA_ENV}" python main.py \
+      "${COMMON_ARGS[@]}" \
+      "${UCM_ARGS[@]}" \
+      --debug \
+      --ucm_trace_retrieval \
+      --output_dir "${OUTPUT_DIR}"
+    ;;
+
+  ucm_repocoder_debug)
+    OUTPUT_DIR="result_infer/UCM_multipath_repocoder_debug"
+    conda run -p "${CONDA_ENV}" python main.py \
+      "${COMMON_ARGS[@]}" \
+      "${UCM_ARGS[@]}" \
+      --debug \
+      --enable_repocoder \
+      --rlcoder_model_path "${RLCODER_MODEL}" \
+      --ucm_trace_retrieval \
+      --output_dir "${OUTPUT_DIR}"
+    ;;
+
+  ucm_full)
+    OUTPUT_DIR="result_infer/UCM_multipath_deepseekcoder_7b_crossfile_1536_infile_512"
+    conda run -p "${CONDA_ENV}" python main.py \
+      "${COMMON_ARGS[@]}" \
+      "${UCM_ARGS[@]}" \
+      --output_dir "${OUTPUT_DIR}"
+    ;;
+
+  *)
+    echo "Unknown RUN_MODE=${RUN_MODE}" >&2
+    echo "Use one of: baseline_debug, ucm_debug, ucm_repocoder_debug, ucm_full" >&2
+    exit 2
+    ;;
+esac
+
+echo "End time: $(date)"

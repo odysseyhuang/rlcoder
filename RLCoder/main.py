@@ -10,6 +10,8 @@ from generator import Generator
 from bm25 import TaskSpecificBM25
 from retriever import Retriever, tokenize
 from datasets import load_test_dataset, load_train_and_valid_dataset, construct_dataset, CodeBlock
+from context_query import build_base_query, build_query_bundle
+from context_candidates import recall_multi_path_candidates, log_retrieval_trace
 
 from transformers import get_linear_schedule_with_warmup
 from torch.optim import AdamW
@@ -67,31 +69,76 @@ def retrieve_codeblocks(args, examples, bm25, retriever, dataset_name, is_traini
             bm25_topk = args.sample_number * 10 
             unixcoder_topk = args.sample_number 
 
-        queries = ["\n".join([x for x in example.left_context.split("\n") if x.strip() != ""][-context_len:]) for example in examples]
-        candidate_codeblocks = bm25[dataset_name].query([x.task_id for x in examples], queries, topk=bm25_topk)
+        base_queries = [build_base_query(example, context_len=context_len) for example in examples]
+        queries = base_queries
+        ucm_trace_rows = None
 
-        if args.enable_repocoder and inference_type == 'unixcoder_with_rl':
-            _, retrieved_codeblocks = retrieve_codeblocks(args, examples, bm25, retriever_RLCoder, dataset_name, inference_type="unixcoder") 
-            generations = generator.generate(examples, retrieved_codeblocks, args.generator_max_generation_length)
+        enable_ucm_multi_path = (
+            getattr(args, "enable_ucm", False)
+            and getattr(args, "enable_multi_path_retrieval", False)
+        )
 
-            queries = [query + '\n' + prediction for query, prediction in zip(queries, generations)]
+        if enable_ucm_multi_path:
+            draft_generations = None
+            if args.enable_repocoder and inference_type == 'unixcoder_with_rl':
+                draft_args = copy.deepcopy(args)
+                draft_args.enable_ucm = False
+                draft_args.enable_multi_path_retrieval = False
+                _, retrieved_codeblocks = retrieve_codeblocks(draft_args, examples, bm25, retriever_RLCoder, dataset_name, inference_type="unixcoder")
+                draft_generations = generator.generate(examples, retrieved_codeblocks, args.generator_max_generation_length)
+                queries = [query + '\n' + prediction for query, prediction in zip(base_queries, draft_generations)]
+
+            query_bundles = [
+                build_query_bundle(
+                    args,
+                    example,
+                    base_query=base_query,
+                    draft_prediction=draft_generations[idx] if draft_generations else None,
+                    context_len=context_len,
+                )
+                for idx, (example, base_query) in enumerate(zip(examples, base_queries))
+            ]
+            candidate_codeblocks, ucm_trace_rows = recall_multi_path_candidates(
+                args,
+                examples,
+                bm25[dataset_name],
+                query_bundles,
+            )
+        else:
+            candidate_codeblocks = bm25[dataset_name].query([x.task_id for x in examples], queries, topk=bm25_topk)
+
+            if args.enable_repocoder and inference_type == 'unixcoder_with_rl':
+                _, retrieved_codeblocks = retrieve_codeblocks(args, examples, bm25, retriever_RLCoder, dataset_name, inference_type="unixcoder")
+                generations = generator.generate(examples, retrieved_codeblocks, args.generator_max_generation_length)
+
+                queries = [query + '\n' + prediction for query, prediction in zip(queries, generations)]
 
         if inference_type == "bm25":
+            if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
+                log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
             return queries, candidate_codeblocks
         elif inference_type == "unixcoder":
+            if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
+                log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
             return queries, retriever.retrieve(queries, candidate_codeblocks, topk=unixcoder_topk)
         elif inference_type == "unixcoder_with_rl":
             if is_training:
                 if args.disable_stop_block:
+                    if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
+                        log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
                     candidate_codeblocks = retriever.retrieve(queries, candidate_codeblocks, topk=unixcoder_topk)
                 else:
+                    if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
+                        log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
                     candidate_codeblocks = retriever.retrieve(queries, candidate_codeblocks, topk=unixcoder_topk-1)
 
                     candidate_codeblocks = [x + [CodeBlock("", "Don't need cross file context for completion", "", y.language, '')] for x,y in zip(candidate_codeblocks, examples)]
             else:
                 if not args.disable_stop_block:
                     candidate_codeblocks = [x + [CodeBlock("", "Don't need cross file context for completion", "", y.language, '')] for x,y in zip(candidate_codeblocks, examples)]
-                
+
+                if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
+                    log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
                 candidate_codeblocks = retriever.retrieve(queries,  candidate_codeblocks, topk=unixcoder_topk)
         
             return queries, candidate_codeblocks
@@ -499,6 +546,14 @@ if __name__ == "__main__":
 
     parser.add_argument("--enable_repocoder", action="store_true", help="Use the repocoder method during generation")
     parser.add_argument("--rlcoder_model_path", default=local_model_path("unixcoder-base"), type=str, help="Stage 1 model for repocoder")
+
+    parser.add_argument("--enable_ucm", action="store_true", help="Enable UCM extensions")
+    parser.add_argument("--enable_multi_path_retrieval", action="store_true", help="Enable UCM multi-path BM25 candidate recall")
+    parser.add_argument("--ucm_topk_per_path", default=20, type=int, help="Number of BM25 candidates per UCM query view")
+    parser.add_argument("--ucm_candidate_pool_size", default=100, type=int, help="Maximum merged UCM candidate pool size")
+    parser.add_argument("--ucm_query_identifier_limit", default=64, type=int, help="Maximum identifier tokens in the UCM identifier query")
+    parser.add_argument("--ucm_query_import_limit", default=32, type=int, help="Maximum import/API lines or tokens in the UCM import query")
+    parser.add_argument("--ucm_trace_retrieval", action="store_true", help="Print UCM candidate recall trace")
 
     parser.add_argument("--do_codereval", action="store_true", help="Execute codereval evaluation in docker")
     parser.add_argument("--enable_forward_generation", action="store_true", help="Use progressive generation methods during inference")
