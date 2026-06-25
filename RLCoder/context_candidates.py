@@ -1,3 +1,5 @@
+import json
+import os
 from collections import Counter
 
 from datasets import CodeBlock
@@ -86,6 +88,25 @@ def merge_candidates(hits, candidate_pool_size, task_id=None, source_counts=None
     return candidates, trace
 
 
+def add_retrieval_trace_results(trace_rows, retrieved_codeblocks):
+    for trace, candidates in zip(trace_rows, retrieved_codeblocks):
+        trace["retrieved_sources"] = _retrieved_source_counts(candidates)
+        trace["stop_rank"] = _find_stop_rank(candidates)
+    return trace_rows
+
+
+def write_retrieval_trace(output_dir, dataset_name, trace_rows):
+    if not output_dir or not dataset_name or not trace_rows:
+        return
+
+    dataset_dir = os.path.join(output_dir, dataset_name)
+    os.makedirs(dataset_dir, exist_ok=True)
+    trace_path = os.path.join(dataset_dir, "ucm_retrieval_trace.jsonl")
+    with open(trace_path, "a", encoding="utf-8") as f_trace:
+        for trace in trace_rows:
+            f_trace.write(json.dumps(trace, ensure_ascii=False) + "\n")
+
+
 def candidate_key(candidate):
     return (candidate.file_path, candidate.description, candidate.code_content)
 
@@ -102,10 +123,14 @@ def log_retrieval_trace(dataset_name, trace_rows, retriever_inputs=None):
             if final_counts is not None
             else trace["candidate_pool_size"]
         )
+        retrieved_sources = ", ".join(
+            f"{source}:{count}" for source, count in sorted(trace.get("retrieved_sources", {}).items())
+        )
         print(
             f"{prefix} task={trace['task_id']} "
             f"sources=({source_hits}) raw={trace['raw_hits']} "
-            f"merged={trace['merged_candidates']} retriever_input={retriever_input}"
+            f"merged={trace['merged_candidates']} retriever_input={retriever_input} "
+            f"retrieved=({retrieved_sources}) stop_rank={trace.get('stop_rank')}"
         )
 
 
@@ -156,10 +181,32 @@ def _candidate_sort_key(item):
 
 def _copy_with_multi_type(candidate, sources):
     best_source = min(sources, key=lambda source: SOURCE_PRIORITY.get(source, 99))
-    return CodeBlock(
+    copied = CodeBlock(
         candidate.file_path,
         candidate.description,
         candidate.code_content,
         candidate.language,
         f"multi_{best_source}",
     )
+    copied._ucm_sources = tuple(sorted(sources, key=lambda source: SOURCE_PRIORITY.get(source, 99)))
+    return copied
+
+
+def _retrieved_source_counts(candidates):
+    counts = Counter()
+    for candidate in candidates:
+        if _is_stop_block(candidate):
+            break
+        counts[getattr(candidate, "_type", "") or "unknown"] += 1
+    return dict(counts)
+
+
+def _find_stop_rank(candidates):
+    for idx, candidate in enumerate(candidates, start=1):
+        if _is_stop_block(candidate):
+            return idx
+    return None
+
+
+def _is_stop_block(candidate):
+    return getattr(candidate, "file_path", None) == ""

@@ -11,7 +11,13 @@ from bm25 import TaskSpecificBM25
 from retriever import Retriever, tokenize
 from datasets import load_test_dataset, load_train_and_valid_dataset, construct_dataset, CodeBlock
 from context_query import build_base_query, build_query_bundle
-from context_candidates import recall_multi_path_candidates, log_retrieval_trace
+from context_candidates import (
+    add_retrieval_trace_results,
+    recall_multi_path_candidates,
+    log_retrieval_trace,
+    write_retrieval_trace,
+)
+from context_gate import apply_candidate_gate, apply_retrieved_context_gate
 
 from transformers import get_linear_schedule_with_warmup
 from torch.optim import AdamW
@@ -105,6 +111,7 @@ def retrieve_codeblocks(args, examples, bm25, retriever, dataset_name, is_traini
                 query_bundles,
                 base_topk=bm25_topk,
             )
+            candidate_codeblocks = apply_candidate_gate(candidate_codeblocks, args)
         else:
             candidate_codeblocks = bm25[dataset_name].query([x.task_id for x in examples], queries, topk=bm25_topk)
 
@@ -115,36 +122,86 @@ def retrieve_codeblocks(args, examples, bm25, retriever, dataset_name, is_traini
                 queries = [query + '\n' + prediction for query, prediction in zip(queries, generations)]
 
         if inference_type == "bm25":
+            _finalize_ucm_trace(args, dataset_name, ucm_trace_rows, candidate_codeblocks)
             if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
                 log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
             return queries, candidate_codeblocks
         elif inference_type == "unixcoder":
+            candidate_codeblocks = retriever.retrieve(queries, candidate_codeblocks, topk=unixcoder_topk)
+            if not is_training:
+                candidate_codeblocks = apply_retrieved_context_gate(candidate_codeblocks, args)
+            _finalize_ucm_trace(args, dataset_name, ucm_trace_rows, candidate_codeblocks)
             if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
                 log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
-            return queries, retriever.retrieve(queries, candidate_codeblocks, topk=unixcoder_topk)
+            return queries, candidate_codeblocks
         elif inference_type == "unixcoder_with_rl":
             if is_training:
                 if args.disable_stop_block:
-                    if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
-                        log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
                     candidate_codeblocks = retriever.retrieve(queries, candidate_codeblocks, topk=unixcoder_topk)
                 else:
-                    if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
-                        log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
                     candidate_codeblocks = retriever.retrieve(queries, candidate_codeblocks, topk=unixcoder_topk-1)
 
                     candidate_codeblocks = [x + [CodeBlock("", "Don't need cross file context for completion", "", y.language, '')] for x,y in zip(candidate_codeblocks, examples)]
+                _finalize_ucm_trace(args, dataset_name, ucm_trace_rows, candidate_codeblocks)
+                if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
+                    log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
             else:
                 if not args.disable_stop_block:
                     candidate_codeblocks = [x + [CodeBlock("", "Don't need cross file context for completion", "", y.language, '')] for x,y in zip(candidate_codeblocks, examples)]
 
+                candidate_codeblocks = retriever.retrieve(queries,  candidate_codeblocks, topk=unixcoder_topk)
+                candidate_codeblocks = apply_retrieved_context_gate(candidate_codeblocks, args)
+                _finalize_ucm_trace(args, dataset_name, ucm_trace_rows, candidate_codeblocks)
                 if ucm_trace_rows and getattr(args, "ucm_trace_retrieval", False):
                     log_retrieval_trace(dataset_name, ucm_trace_rows, candidate_codeblocks)
-                candidate_codeblocks = retriever.retrieve(queries,  candidate_codeblocks, topk=unixcoder_topk)
         
             return queries, candidate_codeblocks
 
     raise ValueError("Unsupported inference type: {}".format(args.inference_type))
+
+
+def _finalize_ucm_trace(args, dataset_name, trace_rows, retrieved_codeblocks):
+    if not trace_rows:
+        return
+
+    add_retrieval_trace_results(trace_rows, retrieved_codeblocks)
+    write_retrieval_trace(args.output_dir, dataset_name, trace_rows)
+
+
+def _apply_ucm_output_suffix(args):
+    if not (
+        getattr(args, "enable_ucm", False)
+        and getattr(args, "enable_multi_path_retrieval", False)
+    ):
+        return
+
+    suffix = _ucm_output_suffix(args)
+    output_dir = args.output_dir.rstrip("/\\")
+    basename = os.path.basename(output_dir)
+    if suffix not in basename:
+        args.output_dir = f"{output_dir}_{suffix}"
+
+
+def _ucm_output_suffix(args):
+    parts = [
+        "noid" if getattr(args, "ucm_disable_identifier_query", False) else "id",
+        "noimport" if getattr(args, "ucm_disable_import_api_query", False) else "import",
+        "path" if getattr(args, "ucm_enable_path_query", False) else "nopath",
+        f"base{getattr(args, 'ucm_base_topk', 0)}",
+        f"aux{getattr(args, 'ucm_topk_per_path', 10)}",
+        f"pathk{getattr(args, 'ucm_path_topk', 5)}",
+        f"pool{getattr(args, 'ucm_candidate_pool_size', 120)}",
+    ]
+    if getattr(args, "enable_context_gate", False):
+        parts.append(
+            "gate_"
+            f"aux{getattr(args, 'ucm_gate_max_auxiliary_blocks', 2)}_"
+            f"path{getattr(args, 'ucm_gate_allow_path_only', 0)}_"
+            f"stop{getattr(args, 'ucm_gate_stop_rank_threshold', 2)}"
+        )
+    else:
+        parts.append("nogate")
+    return "_".join(parts)
 
 
 class CustomDataset(Dataset):
@@ -554,10 +611,16 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_topk_per_path", default=10, type=int, help="Number of BM25 candidates per auxiliary UCM query view")
     parser.add_argument("--ucm_path_topk", default=5, type=int, help="Number of BM25 candidates for the optional path query view")
     parser.add_argument("--ucm_candidate_pool_size", default=120, type=int, help="Maximum merged UCM candidate pool size")
+    parser.add_argument("--ucm_disable_identifier_query", action="store_true", help="Disable the UCM identifier query view")
+    parser.add_argument("--ucm_disable_import_api_query", action="store_true", help="Disable the UCM import/API query view")
     parser.add_argument("--ucm_enable_path_query", action="store_true", help="Enable the path-based UCM query view")
     parser.add_argument("--ucm_query_identifier_limit", default=64, type=int, help="Maximum identifier tokens in the UCM identifier query")
     parser.add_argument("--ucm_query_import_limit", default=32, type=int, help="Maximum import/API lines or tokens in the UCM import query")
-    parser.add_argument("--ucm_trace_retrieval", action="store_true", help="Print UCM candidate recall trace")
+    parser.add_argument("--ucm_trace_retrieval", action="store_true", help="Print UCM retrieval trace; jsonl trace files are always written for UCM retrieval")
+    parser.add_argument("--enable_context_gate", action="store_true", help="Enable lightweight rule-based UCM context gate")
+    parser.add_argument("--ucm_gate_max_auxiliary_blocks", default=2, type=int, help="Maximum auxiliary-only UCM candidates kept before reranking")
+    parser.add_argument("--ucm_gate_allow_path_only", default=0, type=int, help="Maximum path-only UCM candidates kept before reranking")
+    parser.add_argument("--ucm_gate_stop_rank_threshold", default=2, type=int, help="Trim final context after an early stop block at or before this rank")
 
     parser.add_argument("--do_codereval", action="store_true", help="Execute codereval evaluation in docker")
     parser.add_argument("--enable_forward_generation", action="store_true", help="Use progressive generation methods during inference")
@@ -574,6 +637,8 @@ if __name__ == "__main__":
     print("Number of GPUs:", torch.cuda.device_count())
 
     args = parser.parse_args()
+    _apply_ucm_output_suffix(args)
+    print("Output dir:", args.output_dir)
     args.generator_batch_size = args.generator_batch_size_per_gpu * torch.cuda.device_count()
     args.retriever_batch_size = args.retriever_batch_size_per_gpu * torch.cuda.device_count()
 

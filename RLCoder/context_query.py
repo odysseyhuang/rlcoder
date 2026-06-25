@@ -51,19 +51,21 @@ def build_query_bundle(args, example, base_query=None, draft_prediction=None, co
 
     views = [QueryView("base", base_query)]
 
-    identifier_query = build_identifier_query(
-        example.left_context,
-        getattr(args, "ucm_query_identifier_limit", 64),
-    )
-    if identifier_query:
-        views.append(QueryView("identifier", identifier_query))
+    if not getattr(args, "ucm_disable_identifier_query", False):
+        identifier_query = build_identifier_query(
+            example.left_context,
+            getattr(args, "ucm_query_identifier_limit", 64),
+        )
+        if identifier_query:
+            views.append(QueryView("identifier", identifier_query))
 
-    import_api_query = build_import_api_query(
-        example.left_context,
-        getattr(args, "ucm_query_import_limit", 32),
-    )
-    if import_api_query:
-        views.append(QueryView("import_api", import_api_query))
+    if not getattr(args, "ucm_disable_import_api_query", False):
+        import_api_query = build_import_api_query(
+            example.left_context,
+            getattr(args, "ucm_query_import_limit", 32),
+        )
+        if import_api_query:
+            views.append(QueryView("import_api", import_api_query))
 
     path_query = build_path_query(example.file_path)
     if getattr(args, "ucm_enable_path_query", False) and path_query:

@@ -28,9 +28,15 @@ UCM_BASE_TOPK="${UCM_BASE_TOPK:-0}"
 UCM_TOPK_PER_PATH="${UCM_TOPK_PER_PATH:-10}"
 UCM_PATH_TOPK="${UCM_PATH_TOPK:-5}"
 UCM_CANDIDATE_POOL_SIZE="${UCM_CANDIDATE_POOL_SIZE:-120}"
+UCM_DISABLE_IDENTIFIER_QUERY="${UCM_DISABLE_IDENTIFIER_QUERY:-0}"
+UCM_DISABLE_IMPORT_API_QUERY="${UCM_DISABLE_IMPORT_API_QUERY:-0}"
 UCM_ENABLE_PATH_QUERY="${UCM_ENABLE_PATH_QUERY:-0}"
 UCM_QUERY_IDENTIFIER_LIMIT="${UCM_QUERY_IDENTIFIER_LIMIT:-64}"
 UCM_QUERY_IMPORT_LIMIT="${UCM_QUERY_IMPORT_LIMIT:-32}"
+UCM_ENABLE_CONTEXT_GATE="${UCM_ENABLE_CONTEXT_GATE:-0}"
+UCM_GATE_MAX_AUXILIARY_BLOCKS="${UCM_GATE_MAX_AUXILIARY_BLOCKS:-2}"
+UCM_GATE_ALLOW_PATH_ONLY="${UCM_GATE_ALLOW_PATH_ONLY:-0}"
+UCM_GATE_STOP_RANK_THRESHOLD="${UCM_GATE_STOP_RANK_THRESHOLD:-2}"
 
 cd "${PROJECT_DIR}"
 mkdir -p log_infer result_infer
@@ -42,11 +48,49 @@ fi
 
 make_output_dir() {
   local base_dir="$1"
+  local include_ucm_suffix="${2:-0}"
+  local suffix=""
+  if [[ "${include_ucm_suffix}" == "1" ]]; then
+    suffix="$(make_ucm_suffix)"
+  fi
   if [[ -n "${UCM_RUN_TAG}" ]]; then
-    printf "%s_%s" "${base_dir}" "${UCM_RUN_TAG}"
+    suffix="${suffix:+${suffix}_}${UCM_RUN_TAG}"
+  fi
+  if [[ -n "${suffix}" ]]; then
+    printf "%s_%s" "${base_dir}" "${suffix}"
   else
     printf "%s" "${base_dir}"
   fi
+}
+
+make_ucm_suffix() {
+  local id_part="id"
+  local import_part="import"
+  local path_part="nopath"
+  local gate_part="nogate"
+
+  if [[ "${UCM_DISABLE_IDENTIFIER_QUERY}" == "1" ]]; then
+    id_part="noid"
+  fi
+  if [[ "${UCM_DISABLE_IMPORT_API_QUERY}" == "1" ]]; then
+    import_part="noimport"
+  fi
+  if [[ "${UCM_ENABLE_PATH_QUERY}" == "1" ]]; then
+    path_part="path"
+  fi
+  if [[ "${UCM_ENABLE_CONTEXT_GATE}" == "1" ]]; then
+    gate_part="gate_aux${UCM_GATE_MAX_AUXILIARY_BLOCKS}_path${UCM_GATE_ALLOW_PATH_ONLY}_stop${UCM_GATE_STOP_RANK_THRESHOLD}"
+  fi
+
+  printf "%s_%s_%s_base%s_aux%s_pathk%s_pool%s_%s" \
+    "${id_part}" \
+    "${import_part}" \
+    "${path_part}" \
+    "${UCM_BASE_TOPK}" \
+    "${UCM_TOPK_PER_PATH}" \
+    "${UCM_PATH_TOPK}" \
+    "${UCM_CANDIDATE_POOL_SIZE}" \
+    "${gate_part}"
 }
 
 export TOKENIZERS_PARALLELISM=false
@@ -54,6 +98,8 @@ export TOKENIZERS_PARALLELISM=false
 echo "Job ID: ${SLURM_JOB_ID:-NA}"
 echo "Run mode: ${RUN_MODE}"
 echo "Run tag: ${UCM_RUN_TAG:-default}"
+echo "UCM source switches: disable_identifier=${UCM_DISABLE_IDENTIFIER_QUERY}, disable_import_api=${UCM_DISABLE_IMPORT_API_QUERY}, enable_path=${UCM_ENABLE_PATH_QUERY}"
+echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 echo "Project dir: ${PROJECT_DIR}"
@@ -84,8 +130,25 @@ UCM_ARGS=(
   --ucm_query_import_limit "${UCM_QUERY_IMPORT_LIMIT}"
 )
 
+if [[ "${UCM_DISABLE_IDENTIFIER_QUERY}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_disable_identifier_query)
+fi
+
+if [[ "${UCM_DISABLE_IMPORT_API_QUERY}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_disable_import_api_query)
+fi
+
 if [[ "${UCM_ENABLE_PATH_QUERY}" == "1" ]]; then
   UCM_ARGS+=(--ucm_enable_path_query)
+fi
+
+if [[ "${UCM_ENABLE_CONTEXT_GATE}" == "1" ]]; then
+  UCM_ARGS+=(
+    --enable_context_gate
+    --ucm_gate_max_auxiliary_blocks "${UCM_GATE_MAX_AUXILIARY_BLOCKS}"
+    --ucm_gate_allow_path_only "${UCM_GATE_ALLOW_PATH_ONLY}"
+    --ucm_gate_stop_rank_threshold "${UCM_GATE_STOP_RANK_THRESHOLD}"
+  )
 fi
 
 case "${RUN_MODE}" in
@@ -99,7 +162,7 @@ case "${RUN_MODE}" in
     ;;
 
   ucm_debug)
-    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_debug")"
+    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_debug" 1)"
     echo "Output dir: ${OUTPUT_DIR}"
     conda run -p "${CONDA_ENV}" python main.py \
       "${COMMON_ARGS[@]}" \
@@ -110,7 +173,7 @@ case "${RUN_MODE}" in
     ;;
 
   ucm_repocoder_debug)
-    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_repocoder_debug")"
+    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_repocoder_debug" 1)"
     echo "Output dir: ${OUTPUT_DIR}"
     conda run -p "${CONDA_ENV}" python main.py \
       "${COMMON_ARGS[@]}" \
@@ -123,7 +186,7 @@ case "${RUN_MODE}" in
     ;;
 
   ucm_full)
-    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_deepseekcoder_7b_crossfile_1536_infile_512")"
+    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_deepseekcoder_7b_crossfile_1536_infile_512" 1)"
     echo "Output dir: ${OUTPUT_DIR}"
     conda run -p "${CONDA_ENV}" python main.py \
       "${COMMON_ARGS[@]}" \
