@@ -197,7 +197,12 @@ def _retrieved_source_counts(candidates):
     for candidate in candidates:
         if _is_stop_block(candidate):
             break
-        counts[getattr(candidate, "_type", "") or "unknown"] += 1
+        sources = getattr(candidate, "_ucm_sources", None)
+        if sources:
+            for source in sources:
+                counts[source] += 1
+        else:
+            counts[getattr(candidate, "_type", "") or "unknown"] += 1
     return dict(counts)
 
 

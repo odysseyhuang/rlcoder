@@ -191,6 +191,7 @@ def _ucm_output_suffix(args):
         f"aux{getattr(args, 'ucm_topk_per_path', 10)}",
         f"pathk{getattr(args, 'ucm_path_topk', 5)}",
         f"pool{getattr(args, 'ucm_candidate_pool_size', 120)}",
+        "legacybm25" if getattr(args, "ucm_disable_enhanced_bm25", False) else "enhbm25",
     ]
     if getattr(args, "enable_context_gate", False):
         parts.append(
@@ -616,6 +617,7 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_enable_path_query", action="store_true", help="Enable the path-based UCM query view")
     parser.add_argument("--ucm_query_identifier_limit", default=64, type=int, help="Maximum identifier tokens in the UCM identifier query")
     parser.add_argument("--ucm_query_import_limit", default=32, type=int, help="Maximum import/API lines or tokens in the UCM import query")
+    parser.add_argument("--ucm_disable_enhanced_bm25", action="store_true", help="Use the original BM25 tokenization and code-only index for UCM")
     parser.add_argument("--ucm_trace_retrieval", action="store_true", help="Print UCM retrieval trace; jsonl trace files are always written for UCM retrieval")
     parser.add_argument("--enable_context_gate", action="store_true", help="Enable lightweight rule-based UCM context gate")
     parser.add_argument("--ucm_gate_max_auxiliary_blocks", default=2, type=int, help="Maximum auxiliary-only UCM candidates kept before reranking")

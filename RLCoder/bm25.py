@@ -5,11 +5,47 @@ from typing import List
 from datasets import CodeBlock
 from functools import partial
 import math
+import re
 
 import logging
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s', datefmt='%m/%d/%Y %H:%M:%S', level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+")
+CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)|[0-9]+")
+
+
+def bm25_tokenize(text):
+    tokens = []
+    for token in TOKEN_RE.findall(text or ""):
+        lowered = token.lower()
+        tokens.append(lowered)
+        for part in re.split(r"[_\s]+", token):
+            for camel_part in CAMEL_RE.findall(part):
+                camel_part = camel_part.lower()
+                if camel_part and camel_part != lowered:
+                    tokens.append(camel_part)
+    return tokens
+
+
+def legacy_bm25_tokenize(text):
+    return (text or "").split()
+
+
+def bm25_document_text(code_block, enable_metadata):
+    if not enable_metadata:
+        return code_block.code_content.lower()
+    return "\n".join(
+        part
+        for part in [
+            code_block.file_path,
+            code_block.description,
+            code_block.code_content,
+        ]
+        if part
+    )
+
 
 def split_into_smaller_blocks(code_block, enable_fixed_block):
     """
@@ -83,6 +119,11 @@ class TaskSpecificBM25:
     def __init__(self, examples, args):
         self.bm25_indices = {}
         self.code_blocks = {}
+        self.enable_enhanced_bm25 = (
+            getattr(args, "enable_ucm", False)
+            and getattr(args, "enable_multi_path_retrieval", False)
+            and not getattr(args, "ucm_disable_enhanced_bm25", False)
+        )
         self._build_indices(examples, args)
         self.args = args
         
@@ -97,7 +138,11 @@ class TaskSpecificBM25:
             # results = pool.map(self._process_batch, example_batches, args.enable_fixed_block)
             # results = pool.map(lambda batch: self._process_batch(batch, args.enable_fixed_block), example_batches)
             from functools import partial
-            partial_process_batch = partial(self._process_batch, enable_fixed_block=args.enable_fixed_block)
+            partial_process_batch = partial(
+                self._process_batch,
+                enable_fixed_block=args.enable_fixed_block,
+                enable_enhanced_bm25=self.enable_enhanced_bm25,
+            )
             results = pool.map(partial_process_batch, example_batches)
         
         for batch_result in results:
@@ -115,7 +160,7 @@ class TaskSpecificBM25:
         logger.info(f'Block avg line: {round(block_len / block_num, 2)}')
 
     @staticmethod
-    def _process_batch(batch, enable_fixed_block):
+    def _process_batch(batch, enable_fixed_block, enable_enhanced_bm25):
         batch_result = []
         for example in batch:
             code_blocks = []
@@ -124,7 +169,13 @@ class TaskSpecificBM25:
             
             bm25_index = None
             if len(code_blocks) != 0:
-                bm25_index = BM25Okapi([code_block.code_content.lower().split() for code_block in code_blocks])
+                tokenizer = bm25_tokenize if enable_enhanced_bm25 else legacy_bm25_tokenize
+                bm25_index = BM25Okapi(
+                    [
+                        tokenizer(bm25_document_text(code_block, enable_enhanced_bm25))
+                        for code_block in code_blocks
+                    ]
+                )
             
             batch_result.append((example.task_id, code_blocks, bm25_index))
         return batch_result
@@ -134,7 +185,10 @@ class TaskSpecificBM25:
         for task_id, query in zip(task_ids, queries):
             bm25_index = self.bm25_indices.get(task_id)
             if bm25_index:
-                query_tokens = query.split()
+                if self.enable_enhanced_bm25:
+                    query_tokens = bm25_tokenize(query)
+                else:
+                    query_tokens = legacy_bm25_tokenize(query)
                 scores = bm25_index.get_scores(query_tokens)
 
                 # topk_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:topk]

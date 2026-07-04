@@ -33,6 +33,7 @@ UCM_DISABLE_IMPORT_API_QUERY="${UCM_DISABLE_IMPORT_API_QUERY:-0}"
 UCM_ENABLE_PATH_QUERY="${UCM_ENABLE_PATH_QUERY:-0}"
 UCM_QUERY_IDENTIFIER_LIMIT="${UCM_QUERY_IDENTIFIER_LIMIT:-64}"
 UCM_QUERY_IMPORT_LIMIT="${UCM_QUERY_IMPORT_LIMIT:-32}"
+UCM_DISABLE_ENHANCED_BM25="${UCM_DISABLE_ENHANCED_BM25:-0}"
 UCM_ENABLE_CONTEXT_GATE="${UCM_ENABLE_CONTEXT_GATE:-0}"
 UCM_GATE_MAX_AUXILIARY_BLOCKS="${UCM_GATE_MAX_AUXILIARY_BLOCKS:-2}"
 UCM_GATE_ALLOW_PATH_ONLY="${UCM_GATE_ALLOW_PATH_ONLY:-0}"
@@ -67,6 +68,7 @@ make_ucm_suffix() {
   local id_part="id"
   local import_part="import"
   local path_part="nopath"
+  local bm25_part="enhbm25"
   local gate_part="nogate"
 
   if [[ "${UCM_DISABLE_IDENTIFIER_QUERY}" == "1" ]]; then
@@ -78,11 +80,14 @@ make_ucm_suffix() {
   if [[ "${UCM_ENABLE_PATH_QUERY}" == "1" ]]; then
     path_part="path"
   fi
+  if [[ "${UCM_DISABLE_ENHANCED_BM25}" == "1" ]]; then
+    bm25_part="legacybm25"
+  fi
   if [[ "${UCM_ENABLE_CONTEXT_GATE}" == "1" ]]; then
     gate_part="gate_aux${UCM_GATE_MAX_AUXILIARY_BLOCKS}_path${UCM_GATE_ALLOW_PATH_ONLY}_stop${UCM_GATE_STOP_RANK_THRESHOLD}"
   fi
 
-  printf "%s_%s_%s_base%s_aux%s_pathk%s_pool%s_%s" \
+  printf "%s_%s_%s_base%s_aux%s_pathk%s_pool%s_%s_%s" \
     "${id_part}" \
     "${import_part}" \
     "${path_part}" \
@@ -90,6 +95,7 @@ make_ucm_suffix() {
     "${UCM_TOPK_PER_PATH}" \
     "${UCM_PATH_TOPK}" \
     "${UCM_CANDIDATE_POOL_SIZE}" \
+    "${bm25_part}" \
     "${gate_part}"
 }
 
@@ -99,6 +105,7 @@ echo "Job ID: ${SLURM_JOB_ID:-NA}"
 echo "Run mode: ${RUN_MODE}"
 echo "Run tag: ${UCM_RUN_TAG:-default}"
 echo "UCM source switches: disable_identifier=${UCM_DISABLE_IDENTIFIER_QUERY}, disable_import_api=${UCM_DISABLE_IMPORT_API_QUERY}, enable_path=${UCM_ENABLE_PATH_QUERY}"
+echo "UCM enhanced BM25: disabled=${UCM_DISABLE_ENHANCED_BM25}"
 echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
@@ -129,6 +136,10 @@ UCM_ARGS=(
   --ucm_query_identifier_limit "${UCM_QUERY_IDENTIFIER_LIMIT}"
   --ucm_query_import_limit "${UCM_QUERY_IMPORT_LIMIT}"
 )
+
+if [[ "${UCM_DISABLE_ENHANCED_BM25}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_disable_enhanced_bm25)
+fi
 
 if [[ "${UCM_DISABLE_IDENTIFIER_QUERY}" == "1" ]]; then
   UCM_ARGS+=(--ucm_disable_identifier_query)
