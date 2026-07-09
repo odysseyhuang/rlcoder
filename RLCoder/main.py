@@ -223,6 +223,7 @@ def _ucm_output_suffix(args):
             f"graph_s{getattr(args, 'ucm_graph_max_seed', 20)}",
             f"n{getattr(args, 'ucm_graph_max_neighbors_per_seed', 2)}",
             f"e{getattr(args, 'ucm_graph_max_expanded', 40)}",
+            "scored",
         ]
         if getattr(args, "ucm_graph_enable_identifier_edges", False):
             graph_parts.append("gid")
@@ -657,6 +658,12 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_graph_enable_identifier_edges", action="store_true", help="Enable identifier-overlap graph edges")
     parser.add_argument("--ucm_graph_enable_import_edges", action="store_true", help="Enable import/path graph edges")
     parser.add_argument("--ucm_graph_identifier_max_df", default=20, type=int, help="Maximum per-task document frequency for identifier graph edges")
+    parser.add_argument("--ucm_graph_seed_rank_decay", default=0.05, type=float, help="Decay applied to graph expansion candidates from lower-ranked seed blocks")
+    parser.add_argument("--ucm_graph_distance_decay", default=0.75, type=float, help="Distance decay for same-file graph neighbors")
+    parser.add_argument("--ucm_graph_same_file_weight", default=1.0, type=float, help="Base score weight for same-file graph edges")
+    parser.add_argument("--ucm_graph_identifier_weight", default=1.2, type=float, help="Base score weight for identifier-overlap graph edges")
+    parser.add_argument("--ucm_graph_import_weight", default=1.4, type=float, help="Base score weight for import/path graph edges")
+    parser.add_argument("--ucm_graph_query_overlap_bonus", default=2, type=int, help="Extra identifier graph score for tokens also present in the query context")
 
     parser.add_argument("--do_codereval", action="store_true", help="Execute codereval evaluation in docker")
     parser.add_argument("--enable_forward_generation", action="store_true", help="Use progressive generation methods during inference")

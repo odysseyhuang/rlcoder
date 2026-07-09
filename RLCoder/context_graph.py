@@ -42,38 +42,102 @@ class ContextGraphIndex:
         max_total = max(0, getattr(args, "ucm_graph_max_expanded", 40))
         enable_identifier = getattr(args, "ucm_graph_enable_identifier_edges", False)
         enable_import = getattr(args, "ucm_graph_enable_import_edges", False)
+        query_identifiers = set(_extract_identifiers(getattr(example, "left_context", "")))
+        query_import_tokens = _extract_import_tokens(getattr(example, "left_context", ""))
 
-        selected = []
         seen = {block_key(block) for block in seed_blocks}
+        proposals = {}
+        proposed_counts = Counter()
         source_counts = Counter()
 
         for seed_rank, seed in enumerate(seed_blocks[:max_seed]):
-            if len(selected) >= max_total:
-                break
             if _is_stop_block(seed):
                 continue
 
             neighbors = []
-            neighbors.extend(self._same_file_neighbors(task_id, seed, max_neighbors))
+            neighbors.extend(
+                self._same_file_neighbors(
+                    task_id,
+                    seed,
+                    max_neighbors,
+                    query_identifiers,
+                    args,
+                )
+            )
             if enable_identifier:
-                neighbors.extend(self._identifier_neighbors(task_id, seed, max_neighbors, args))
+                neighbors.extend(
+                    self._identifier_neighbors(
+                        task_id,
+                        seed,
+                        max_neighbors,
+                        query_identifiers,
+                        args,
+                    )
+                )
             if enable_import:
-                neighbors.extend(self._import_neighbors(task_id, example, seed, max_neighbors))
+                neighbors.extend(
+                    self._import_neighbors(
+                        task_id,
+                        seed,
+                        max_neighbors,
+                        query_import_tokens,
+                        args,
+                    )
+                )
 
-            for neighbor, source in neighbors:
-                if len(selected) >= max_total:
-                    break
+            seed_weight = _seed_rank_weight(seed_rank, args)
+            for neighbor, source, edge_score, edge_distance in neighbors:
                 key = block_key(neighbor)
                 if key in seen:
                     continue
-                seen.add(key)
-                selected.append(_copy_graph_block(neighbor, source, seed_rank))
-                source_counts[source] += 1
+                proposed_counts[source] += 1
+                score = seed_weight * edge_score
+                prev = proposals.get(key)
+                if prev is None or score > prev["score"]:
+                    proposals[key] = {
+                        "block": neighbor,
+                        "source": source,
+                        "score": score,
+                        "seed_rank": seed_rank,
+                        "edge_distance": edge_distance,
+                    }
+
+        ranked = sorted(
+            proposals.values(),
+            key=lambda item: (
+                -item["score"],
+                item["seed_rank"],
+                _graph_source_priority(item["source"]),
+                block_key(item["block"]),
+            ),
+        )
+
+        selected = []
+        scores = []
+        for item in ranked[:max_total]:
+            selected.append(
+                _copy_graph_block(
+                    item["block"],
+                    item["source"],
+                    item["seed_rank"],
+                    item["score"],
+                    item["edge_distance"],
+                )
+            )
+            source_counts[item["source"]] += 1
+            scores.append(item["score"])
 
         trace = {
             "graph_expanded": len(selected),
             "graph_sources": dict(source_counts),
+            "graph_proposed_sources": dict(proposed_counts),
+            "graph_proposed_candidates": len(proposals),
             "graph_seed_count": min(max_seed, len(seed_blocks)),
+            "graph_query_identifier_count": len(query_identifiers),
+            "graph_query_import_token_count": len(query_import_tokens),
+            "graph_score_min": round(min(scores), 6) if scores else None,
+            "graph_score_max": round(max(scores), 6) if scores else None,
+            "graph_score_avg": round(sum(scores) / len(scores), 6) if scores else None,
         }
         return selected, trace
 
@@ -87,7 +151,7 @@ class ContextGraphIndex:
             self.position_by_task[task_id] = positions
             self.file_indices_by_task[task_id] = dict(file_indices)
 
-    def _same_file_neighbors(self, task_id, seed, max_neighbors):
+    def _same_file_neighbors(self, task_id, seed, max_neighbors, query_identifiers, args):
         if max_neighbors <= 0:
             return []
 
@@ -107,16 +171,28 @@ class ContextGraphIndex:
         radius = 1
         while len(neighbors) < max_neighbors and (file_pos - radius >= 0 or file_pos + radius < len(file_indices)):
             if file_pos - radius >= 0:
-                neighbors.append((code_blocks[file_indices[file_pos - radius]], "graph_same_file"))
+                block = code_blocks[file_indices[file_pos - radius]]
+                neighbors.append((
+                    block,
+                    "graph_same_file",
+                    _same_file_score(block, radius, query_identifiers, args),
+                    radius,
+                ))
                 if len(neighbors) >= max_neighbors:
                     break
             if file_pos + radius < len(file_indices):
-                neighbors.append((code_blocks[file_indices[file_pos + radius]], "graph_same_file"))
+                block = code_blocks[file_indices[file_pos + radius]]
+                neighbors.append((
+                    block,
+                    "graph_same_file",
+                    _same_file_score(block, radius, query_identifiers, args),
+                    radius,
+                ))
             radius += 1
 
         return neighbors[:max_neighbors]
 
-    def _identifier_neighbors(self, task_id, seed, max_neighbors, args):
+    def _identifier_neighbors(self, task_id, seed, max_neighbors, query_identifiers, args):
         if max_neighbors <= 0:
             return []
 
@@ -129,6 +205,12 @@ class ContextGraphIndex:
             token for token in _extract_identifiers(seed.code_content)
             if 1 < identifier_df.get(token, 0) <= max_df
         ]
+        focused_identifiers = [
+            token for token in seed_identifiers
+            if token in query_identifiers
+        ]
+        if focused_identifiers:
+            seed_identifiers = focused_identifiers
         if not seed_identifiers:
             return []
 
@@ -139,20 +221,27 @@ class ContextGraphIndex:
                 block = self.code_blocks_by_task[task_id][idx]
                 if block_key(block) != seed_key:
                     scores[idx] += 1
+                    if token in query_identifiers:
+                        scores[idx] += getattr(args, "ucm_graph_query_overlap_bonus", 2)
 
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return [
-            (self.code_blocks_by_task[task_id][idx], "graph_identifier")
-            for idx, _ in ranked[:max_neighbors]
+            (
+                self.code_blocks_by_task[task_id][idx],
+                "graph_identifier",
+                _identifier_score(score, args),
+                1,
+            )
+            for idx, score in ranked[:max_neighbors]
         ]
 
-    def _import_neighbors(self, task_id, example, seed, max_neighbors):
+    def _import_neighbors(self, task_id, seed, max_neighbors, query_import_tokens, args):
         if max_neighbors <= 0:
             return []
 
         self._ensure_path_index(task_id)
         path_index = self.path_index_by_task.get(task_id, {})
-        import_tokens = _extract_import_tokens(getattr(example, "left_context", ""))
+        import_tokens = set(query_import_tokens)
         import_tokens.update(_extract_import_tokens(getattr(seed, "code_content", "")))
         if not import_tokens:
             return []
@@ -167,8 +256,13 @@ class ContextGraphIndex:
 
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return [
-            (self.code_blocks_by_task[task_id][idx], "graph_import")
-            for idx, _ in ranked[:max_neighbors]
+            (
+                self.code_blocks_by_task[task_id][idx],
+                "graph_import",
+                _import_score(score, args),
+                1,
+            )
+            for idx, score in ranked[:max_neighbors]
         ]
 
     def _ensure_identifier_index(self, task_id):
@@ -250,12 +344,52 @@ def _append_deduped(candidates, expanded):
     return merged
 
 
-def _copy_graph_block(block, source, seed_rank):
+def _copy_graph_block(block, source, seed_rank, score=None, edge_distance=None):
     copied = copy.copy(block)
     copied._type = source
     copied._ucm_sources = (source,)
     copied._ucm_graph_seed_rank = seed_rank
+    copied._ucm_graph_score = score
+    copied._ucm_graph_edge_distance = edge_distance
     return copied
+
+
+def _seed_rank_weight(seed_rank, args):
+    decay = max(0.0, getattr(args, "ucm_graph_seed_rank_decay", 0.05))
+    return 1.0 / (1.0 + decay * seed_rank)
+
+
+def _same_file_score(block, distance, query_identifiers, args):
+    base = getattr(args, "ucm_graph_same_file_weight", 1.0)
+    distance_decay = getattr(args, "ucm_graph_distance_decay", 0.75)
+    overlap = _query_identifier_overlap(block, query_identifiers)
+    return base * (distance_decay ** max(0, distance - 1)) + overlap
+
+
+def _identifier_score(overlap_count, args):
+    base = getattr(args, "ucm_graph_identifier_weight", 1.2)
+    return base + max(0, overlap_count)
+
+
+def _import_score(overlap_count, args):
+    base = getattr(args, "ucm_graph_import_weight", 1.4)
+    return base + max(0, overlap_count)
+
+
+def _query_identifier_overlap(block, query_identifiers):
+    if not query_identifiers:
+        return 0.0
+    block_identifiers = set(_extract_identifiers(getattr(block, "code_content", "")))
+    overlap = len(block_identifiers & query_identifiers)
+    return min(2.0, 0.25 * overlap)
+
+
+def _graph_source_priority(source):
+    return {
+        "graph_import": 0,
+        "graph_identifier": 1,
+        "graph_same_file": 2,
+    }.get(source, 99)
 
 
 def _extract_identifiers(text):

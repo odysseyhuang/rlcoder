@@ -45,6 +45,12 @@ UCM_GRAPH_MAX_EXPANDED="${UCM_GRAPH_MAX_EXPANDED:-40}"
 UCM_GRAPH_ENABLE_IDENTIFIER_EDGES="${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES:-0}"
 UCM_GRAPH_ENABLE_IMPORT_EDGES="${UCM_GRAPH_ENABLE_IMPORT_EDGES:-0}"
 UCM_GRAPH_IDENTIFIER_MAX_DF="${UCM_GRAPH_IDENTIFIER_MAX_DF:-20}"
+UCM_GRAPH_SEED_RANK_DECAY="${UCM_GRAPH_SEED_RANK_DECAY:-0.05}"
+UCM_GRAPH_DISTANCE_DECAY="${UCM_GRAPH_DISTANCE_DECAY:-0.75}"
+UCM_GRAPH_SAME_FILE_WEIGHT="${UCM_GRAPH_SAME_FILE_WEIGHT:-1.0}"
+UCM_GRAPH_IDENTIFIER_WEIGHT="${UCM_GRAPH_IDENTIFIER_WEIGHT:-1.2}"
+UCM_GRAPH_IMPORT_WEIGHT="${UCM_GRAPH_IMPORT_WEIGHT:-1.4}"
+UCM_GRAPH_QUERY_OVERLAP_BONUS="${UCM_GRAPH_QUERY_OVERLAP_BONUS:-2}"
 
 cd "${PROJECT_DIR}"
 mkdir -p log_infer result_infer
@@ -95,7 +101,7 @@ make_ucm_suffix() {
     gate_part="gate_aux${UCM_GATE_MAX_AUXILIARY_BLOCKS}_path${UCM_GATE_ALLOW_PATH_ONLY}_stop${UCM_GATE_STOP_RANK_THRESHOLD}"
   fi
   if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
-    graph_part="graph_s${UCM_GRAPH_MAX_SEED}_n${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}_e${UCM_GRAPH_MAX_EXPANDED}"
+    graph_part="graph_s${UCM_GRAPH_MAX_SEED}_n${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}_e${UCM_GRAPH_MAX_EXPANDED}_scored"
     if [[ "${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}" == "1" ]]; then
       graph_part="${graph_part}_gid"
     fi
@@ -126,6 +132,7 @@ echo "UCM source switches: disable_identifier=${UCM_DISABLE_IDENTIFIER_QUERY}, d
 echo "UCM enhanced BM25: disabled=${UCM_DISABLE_ENHANCED_BM25}"
 echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
 echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}"
+echo "UCM graph scoring: seed_decay=${UCM_GRAPH_SEED_RANK_DECAY}, distance_decay=${UCM_GRAPH_DISTANCE_DECAY}, same_file_w=${UCM_GRAPH_SAME_FILE_WEIGHT}, identifier_w=${UCM_GRAPH_IDENTIFIER_WEIGHT}, import_w=${UCM_GRAPH_IMPORT_WEIGHT}, query_bonus=${UCM_GRAPH_QUERY_OVERLAP_BONUS}"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 echo "Project dir: ${PROJECT_DIR}"
@@ -188,6 +195,12 @@ if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
     --ucm_graph_max_neighbors_per_seed "${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}"
     --ucm_graph_max_expanded "${UCM_GRAPH_MAX_EXPANDED}"
     --ucm_graph_identifier_max_df "${UCM_GRAPH_IDENTIFIER_MAX_DF}"
+    --ucm_graph_seed_rank_decay "${UCM_GRAPH_SEED_RANK_DECAY}"
+    --ucm_graph_distance_decay "${UCM_GRAPH_DISTANCE_DECAY}"
+    --ucm_graph_same_file_weight "${UCM_GRAPH_SAME_FILE_WEIGHT}"
+    --ucm_graph_identifier_weight "${UCM_GRAPH_IDENTIFIER_WEIGHT}"
+    --ucm_graph_import_weight "${UCM_GRAPH_IMPORT_WEIGHT}"
+    --ucm_graph_query_overlap_bonus "${UCM_GRAPH_QUERY_OVERLAP_BONUS}"
   )
 fi
 
