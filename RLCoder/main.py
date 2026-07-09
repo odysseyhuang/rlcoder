@@ -18,6 +18,7 @@ from context_candidates import (
     write_retrieval_trace,
 )
 from context_gate import apply_candidate_gate, apply_retrieved_context_gate
+from context_graph import add_graph_trace_results, expand_context_graph_candidates
 
 from transformers import get_linear_schedule_with_warmup
 from torch.optim import AdamW
@@ -83,6 +84,10 @@ def retrieve_codeblocks(args, examples, bm25, retriever, dataset_name, is_traini
             getattr(args, "enable_ucm", False)
             and getattr(args, "enable_multi_path_retrieval", False)
         )
+        enable_ucm_context_graph = (
+            getattr(args, "enable_ucm", False)
+            and getattr(args, "enable_context_graph", False)
+        )
 
         if enable_ucm_multi_path:
             draft_generations = None
@@ -111,7 +116,6 @@ def retrieve_codeblocks(args, examples, bm25, retriever, dataset_name, is_traini
                 query_bundles,
                 base_topk=bm25_topk,
             )
-            candidate_codeblocks = apply_candidate_gate(candidate_codeblocks, args)
         else:
             candidate_codeblocks = bm25[dataset_name].query([x.task_id for x in examples], queries, topk=bm25_topk)
 
@@ -120,6 +124,18 @@ def retrieve_codeblocks(args, examples, bm25, retriever, dataset_name, is_traini
                 generations = generator.generate(examples, retrieved_codeblocks, args.generator_max_generation_length)
 
                 queries = [query + '\n' + prediction for query, prediction in zip(queries, generations)]
+
+        if enable_ucm_context_graph:
+            candidate_codeblocks, graph_trace_rows = expand_context_graph_candidates(
+                args,
+                examples,
+                bm25[dataset_name],
+                candidate_codeblocks,
+            )
+            add_graph_trace_results(ucm_trace_rows, graph_trace_rows)
+
+        if enable_ucm_multi_path:
+            candidate_codeblocks = apply_candidate_gate(candidate_codeblocks, args)
 
         if inference_type == "bm25":
             _finalize_ucm_trace(args, dataset_name, ucm_trace_rows, candidate_codeblocks)
@@ -187,10 +203,10 @@ def _ucm_output_suffix(args):
         "noid" if getattr(args, "ucm_disable_identifier_query", False) else "id",
         "noimport" if getattr(args, "ucm_disable_import_api_query", False) else "import",
         "path" if getattr(args, "ucm_enable_path_query", False) else "nopath",
-        f"base{getattr(args, 'ucm_base_topk', 0)}",
-        f"aux{getattr(args, 'ucm_topk_per_path', 10)}",
+        f"base{getattr(args, 'ucm_base_topk', 60)}",
+        f"aux{getattr(args, 'ucm_topk_per_path', 30)}",
         f"pathk{getattr(args, 'ucm_path_topk', 5)}",
-        f"pool{getattr(args, 'ucm_candidate_pool_size', 120)}",
+        f"pool{getattr(args, 'ucm_candidate_pool_size', 140)}",
         "legacybm25" if getattr(args, "ucm_disable_enhanced_bm25", False) else "enhbm25",
     ]
     if getattr(args, "enable_context_gate", False):
@@ -202,6 +218,17 @@ def _ucm_output_suffix(args):
         )
     else:
         parts.append("nogate")
+    if getattr(args, "enable_context_graph", False):
+        graph_parts = [
+            f"graph_s{getattr(args, 'ucm_graph_max_seed', 20)}",
+            f"n{getattr(args, 'ucm_graph_max_neighbors_per_seed', 2)}",
+            f"e{getattr(args, 'ucm_graph_max_expanded', 40)}",
+        ]
+        if getattr(args, "ucm_graph_enable_identifier_edges", False):
+            graph_parts.append("gid")
+        if getattr(args, "ucm_graph_enable_import_edges", False):
+            graph_parts.append("gimport")
+        parts.append("_".join(graph_parts))
     return "_".join(parts)
 
 
@@ -608,10 +635,10 @@ if __name__ == "__main__":
 
     parser.add_argument("--enable_ucm", action="store_true", help="Enable UCM extensions")
     parser.add_argument("--enable_multi_path_retrieval", action="store_true", help="Enable UCM multi-path BM25 candidate recall")
-    parser.add_argument("--ucm_base_topk", default=0, type=int, help="BM25 candidates for the base query; 0 keeps the original RLCoder topK")
-    parser.add_argument("--ucm_topk_per_path", default=10, type=int, help="Number of BM25 candidates per auxiliary UCM query view")
+    parser.add_argument("--ucm_base_topk", default=60, type=int, help="BM25 candidates for the base query; 0 keeps the original RLCoder topK")
+    parser.add_argument("--ucm_topk_per_path", default=30, type=int, help="Number of BM25 candidates per auxiliary UCM query view")
     parser.add_argument("--ucm_path_topk", default=5, type=int, help="Number of BM25 candidates for the optional path query view")
-    parser.add_argument("--ucm_candidate_pool_size", default=120, type=int, help="Maximum merged UCM candidate pool size")
+    parser.add_argument("--ucm_candidate_pool_size", default=140, type=int, help="Maximum merged UCM candidate pool size")
     parser.add_argument("--ucm_disable_identifier_query", action="store_true", help="Disable the UCM identifier query view")
     parser.add_argument("--ucm_disable_import_api_query", action="store_true", help="Disable the UCM import/API query view")
     parser.add_argument("--ucm_enable_path_query", action="store_true", help="Enable the path-based UCM query view")
@@ -623,6 +650,13 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_gate_max_auxiliary_blocks", default=2, type=int, help="Maximum auxiliary-only UCM candidates kept before reranking")
     parser.add_argument("--ucm_gate_allow_path_only", default=0, type=int, help="Maximum path-only UCM candidates kept before reranking")
     parser.add_argument("--ucm_gate_stop_rank_threshold", default=2, type=int, help="Trim final context after an early stop block at or before this rank")
+    parser.add_argument("--enable_context_graph", action="store_true", help="Enable lightweight UCM context graph expansion before RLRetriever reranking")
+    parser.add_argument("--ucm_graph_max_seed", default=20, type=int, help="Maximum retrieved/merged seed candidates used for graph expansion")
+    parser.add_argument("--ucm_graph_max_neighbors_per_seed", default=2, type=int, help="Maximum graph neighbors added for each seed candidate")
+    parser.add_argument("--ucm_graph_max_expanded", default=40, type=int, help="Maximum total graph-expanded candidates per example")
+    parser.add_argument("--ucm_graph_enable_identifier_edges", action="store_true", help="Enable identifier-overlap graph edges")
+    parser.add_argument("--ucm_graph_enable_import_edges", action="store_true", help="Enable import/path graph edges")
+    parser.add_argument("--ucm_graph_identifier_max_df", default=20, type=int, help="Maximum per-task document frequency for identifier graph edges")
 
     parser.add_argument("--do_codereval", action="store_true", help="Execute codereval evaluation in docker")
     parser.add_argument("--enable_forward_generation", action="store_true", help="Use progressive generation methods during inference")

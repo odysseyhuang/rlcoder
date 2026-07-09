@@ -24,10 +24,10 @@ GENERATOR_BATCH_SIZE_PER_GPU="${GENERATOR_BATCH_SIZE_PER_GPU:-8}"
 RETRIEVER_BATCH_SIZE_PER_GPU="${RETRIEVER_BATCH_SIZE_PER_GPU:-32}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 
-UCM_BASE_TOPK="${UCM_BASE_TOPK:-0}"
-UCM_TOPK_PER_PATH="${UCM_TOPK_PER_PATH:-10}"
+UCM_BASE_TOPK="${UCM_BASE_TOPK:-60}"
+UCM_TOPK_PER_PATH="${UCM_TOPK_PER_PATH:-30}"
 UCM_PATH_TOPK="${UCM_PATH_TOPK:-5}"
-UCM_CANDIDATE_POOL_SIZE="${UCM_CANDIDATE_POOL_SIZE:-120}"
+UCM_CANDIDATE_POOL_SIZE="${UCM_CANDIDATE_POOL_SIZE:-140}"
 UCM_DISABLE_IDENTIFIER_QUERY="${UCM_DISABLE_IDENTIFIER_QUERY:-0}"
 UCM_DISABLE_IMPORT_API_QUERY="${UCM_DISABLE_IMPORT_API_QUERY:-0}"
 UCM_ENABLE_PATH_QUERY="${UCM_ENABLE_PATH_QUERY:-0}"
@@ -38,6 +38,13 @@ UCM_ENABLE_CONTEXT_GATE="${UCM_ENABLE_CONTEXT_GATE:-0}"
 UCM_GATE_MAX_AUXILIARY_BLOCKS="${UCM_GATE_MAX_AUXILIARY_BLOCKS:-2}"
 UCM_GATE_ALLOW_PATH_ONLY="${UCM_GATE_ALLOW_PATH_ONLY:-0}"
 UCM_GATE_STOP_RANK_THRESHOLD="${UCM_GATE_STOP_RANK_THRESHOLD:-2}"
+UCM_ENABLE_CONTEXT_GRAPH="${UCM_ENABLE_CONTEXT_GRAPH:-0}"
+UCM_GRAPH_MAX_SEED="${UCM_GRAPH_MAX_SEED:-20}"
+UCM_GRAPH_MAX_NEIGHBORS_PER_SEED="${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED:-2}"
+UCM_GRAPH_MAX_EXPANDED="${UCM_GRAPH_MAX_EXPANDED:-40}"
+UCM_GRAPH_ENABLE_IDENTIFIER_EDGES="${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES:-0}"
+UCM_GRAPH_ENABLE_IMPORT_EDGES="${UCM_GRAPH_ENABLE_IMPORT_EDGES:-0}"
+UCM_GRAPH_IDENTIFIER_MAX_DF="${UCM_GRAPH_IDENTIFIER_MAX_DF:-20}"
 
 cd "${PROJECT_DIR}"
 mkdir -p log_infer result_infer
@@ -70,6 +77,7 @@ make_ucm_suffix() {
   local path_part="nopath"
   local bm25_part="enhbm25"
   local gate_part="nogate"
+  local graph_part=""
 
   if [[ "${UCM_DISABLE_IDENTIFIER_QUERY}" == "1" ]]; then
     id_part="noid"
@@ -86,8 +94,17 @@ make_ucm_suffix() {
   if [[ "${UCM_ENABLE_CONTEXT_GATE}" == "1" ]]; then
     gate_part="gate_aux${UCM_GATE_MAX_AUXILIARY_BLOCKS}_path${UCM_GATE_ALLOW_PATH_ONLY}_stop${UCM_GATE_STOP_RANK_THRESHOLD}"
   fi
+  if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
+    graph_part="graph_s${UCM_GRAPH_MAX_SEED}_n${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}_e${UCM_GRAPH_MAX_EXPANDED}"
+    if [[ "${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}" == "1" ]]; then
+      graph_part="${graph_part}_gid"
+    fi
+    if [[ "${UCM_GRAPH_ENABLE_IMPORT_EDGES}" == "1" ]]; then
+      graph_part="${graph_part}_gimport"
+    fi
+  fi
 
-  printf "%s_%s_%s_base%s_aux%s_pathk%s_pool%s_%s_%s" \
+  printf "%s_%s_%s_base%s_aux%s_pathk%s_pool%s_%s_%s%s" \
     "${id_part}" \
     "${import_part}" \
     "${path_part}" \
@@ -96,7 +113,8 @@ make_ucm_suffix() {
     "${UCM_PATH_TOPK}" \
     "${UCM_CANDIDATE_POOL_SIZE}" \
     "${bm25_part}" \
-    "${gate_part}"
+    "${gate_part}" \
+    "${graph_part:+_${graph_part}}"
 }
 
 export TOKENIZERS_PARALLELISM=false
@@ -107,6 +125,7 @@ echo "Run tag: ${UCM_RUN_TAG:-default}"
 echo "UCM source switches: disable_identifier=${UCM_DISABLE_IDENTIFIER_QUERY}, disable_import_api=${UCM_DISABLE_IMPORT_API_QUERY}, enable_path=${UCM_ENABLE_PATH_QUERY}"
 echo "UCM enhanced BM25: disabled=${UCM_DISABLE_ENHANCED_BM25}"
 echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
+echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 echo "Project dir: ${PROJECT_DIR}"
@@ -160,6 +179,24 @@ if [[ "${UCM_ENABLE_CONTEXT_GATE}" == "1" ]]; then
     --ucm_gate_allow_path_only "${UCM_GATE_ALLOW_PATH_ONLY}"
     --ucm_gate_stop_rank_threshold "${UCM_GATE_STOP_RANK_THRESHOLD}"
   )
+fi
+
+if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
+  UCM_ARGS+=(
+    --enable_context_graph
+    --ucm_graph_max_seed "${UCM_GRAPH_MAX_SEED}"
+    --ucm_graph_max_neighbors_per_seed "${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}"
+    --ucm_graph_max_expanded "${UCM_GRAPH_MAX_EXPANDED}"
+    --ucm_graph_identifier_max_df "${UCM_GRAPH_IDENTIFIER_MAX_DF}"
+  )
+fi
+
+if [[ "${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_enable_identifier_edges)
+fi
+
+if [[ "${UCM_GRAPH_ENABLE_IMPORT_EDGES}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_enable_import_edges)
 fi
 
 case "${RUN_MODE}" in
