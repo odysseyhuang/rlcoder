@@ -20,6 +20,12 @@ KEYWORDS = {
     "transient", "try", "true", "void", "volatile", "while", "with", "yield",
 }
 
+WEAK_IDENTIFIERS = {
+    "arg", "args", "cfg", "config", "configs", "data", "default", "item",
+    "items", "key", "kwargs", "obj", "option", "options", "param", "params",
+    "result", "results", "self", "test", "tests", "tmp", "value", "values",
+}
+
 
 class ContextGraphIndex:
     def __init__(self, code_blocks_by_task):
@@ -44,6 +50,8 @@ class ContextGraphIndex:
         enable_import = getattr(args, "ucm_graph_enable_import_edges", False)
         query_identifiers = set(_extract_identifiers(getattr(example, "left_context", "")))
         query_import_tokens = _extract_import_tokens(getattr(example, "left_context", ""))
+        same_file_direction = getattr(args, "ucm_graph_same_file_direction", "both")
+        identifier_query_only = getattr(args, "ucm_graph_identifier_query_only", False)
 
         seen = {block_key(block) for block in seed_blocks}
         proposals = {}
@@ -135,6 +143,8 @@ class ContextGraphIndex:
             "graph_seed_count": min(max_seed, len(seed_blocks)),
             "graph_query_identifier_count": len(query_identifiers),
             "graph_query_import_token_count": len(query_import_tokens),
+            "graph_same_file_direction": same_file_direction,
+            "graph_identifier_query_only": identifier_query_only,
             "graph_score_min": round(min(scores), 6) if scores else None,
             "graph_score_max": round(max(scores), 6) if scores else None,
             "graph_score_avg": round(sum(scores) / len(scores), 6) if scores else None,
@@ -154,6 +164,9 @@ class ContextGraphIndex:
     def _same_file_neighbors(self, task_id, seed, max_neighbors, query_identifiers, args):
         if max_neighbors <= 0:
             return []
+        direction = getattr(args, "ucm_graph_same_file_direction", "both")
+        if direction not in {"both", "prev", "next"}:
+            direction = "both"
 
         code_blocks = self.code_blocks_by_task.get(task_id, [])
         seed_idx = self.position_by_task.get(task_id, {}).get(block_key(seed))
@@ -170,7 +183,7 @@ class ContextGraphIndex:
         neighbors = []
         radius = 1
         while len(neighbors) < max_neighbors and (file_pos - radius >= 0 or file_pos + radius < len(file_indices)):
-            if file_pos - radius >= 0:
+            if direction in {"both", "prev"} and file_pos - radius >= 0:
                 block = code_blocks[file_indices[file_pos - radius]]
                 neighbors.append((
                     block,
@@ -180,7 +193,7 @@ class ContextGraphIndex:
                 ))
                 if len(neighbors) >= max_neighbors:
                     break
-            if file_pos + radius < len(file_indices):
+            if direction in {"both", "next"} and file_pos + radius < len(file_indices):
                 block = code_blocks[file_indices[file_pos + radius]]
                 neighbors.append((
                     block,
@@ -203,13 +216,15 @@ class ContextGraphIndex:
 
         seed_identifiers = [
             token for token in _extract_identifiers(seed.code_content)
-            if 1 < identifier_df.get(token, 0) <= max_df
+            if token not in WEAK_IDENTIFIERS and 1 < identifier_df.get(token, 0) <= max_df
         ]
         focused_identifiers = [
             token for token in seed_identifiers
             if token in query_identifiers
         ]
-        if focused_identifiers:
+        if getattr(args, "ucm_graph_identifier_query_only", False):
+            seed_identifiers = focused_identifiers
+        elif focused_identifiers:
             seed_identifiers = focused_identifiers
         if not seed_identifiers:
             return []

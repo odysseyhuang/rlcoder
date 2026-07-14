@@ -15,6 +15,7 @@ PROJECT_DIR="${PROJECT_DIR:-/share/home/202421045349/projects/RLCoder/RLCoder}"
 CONDA_ENV="${CONDA_ENV:-/share/home/202421045349/conda_envs/rlcoder}"
 RUN_MODE="${RUN_MODE:-ucm_debug}"
 UCM_RUN_TAG="${UCM_RUN_TAG:-}"
+RUN_SHORT_NAME="${RUN_SHORT_NAME:-}"
 
 RETRIEVER_MODEL="${RETRIEVER_MODEL:-./models/RLRetriever}"
 GENERATOR_MODEL="${GENERATOR_MODEL:-./models/deepseek-coder-6.7b-base}"
@@ -45,6 +46,8 @@ UCM_GRAPH_MAX_EXPANDED="${UCM_GRAPH_MAX_EXPANDED:-40}"
 UCM_GRAPH_ENABLE_IDENTIFIER_EDGES="${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES:-0}"
 UCM_GRAPH_ENABLE_IMPORT_EDGES="${UCM_GRAPH_ENABLE_IMPORT_EDGES:-0}"
 UCM_GRAPH_IDENTIFIER_MAX_DF="${UCM_GRAPH_IDENTIFIER_MAX_DF:-20}"
+UCM_GRAPH_SAME_FILE_DIRECTION="${UCM_GRAPH_SAME_FILE_DIRECTION:-both}"
+UCM_GRAPH_IDENTIFIER_QUERY_ONLY="${UCM_GRAPH_IDENTIFIER_QUERY_ONLY:-0}"
 UCM_GRAPH_SEED_RANK_DECAY="${UCM_GRAPH_SEED_RANK_DECAY:-0.05}"
 UCM_GRAPH_DISTANCE_DECAY="${UCM_GRAPH_DISTANCE_DECAY:-0.75}"
 UCM_GRAPH_SAME_FILE_WEIGHT="${UCM_GRAPH_SAME_FILE_WEIGHT:-1.0}"
@@ -57,6 +60,10 @@ mkdir -p log_infer result_infer
 
 if [[ -n "${UCM_RUN_TAG}" && "${UCM_RUN_TAG}" =~ [^A-Za-z0-9._-] ]]; then
   echo "Invalid UCM_RUN_TAG=${UCM_RUN_TAG}; use only letters, numbers, dot, underscore, or hyphen." >&2
+  exit 2
+fi
+if [[ -n "${RUN_SHORT_NAME}" && "${RUN_SHORT_NAME}" =~ [^A-Za-z0-9._-] ]]; then
+  echo "Invalid RUN_SHORT_NAME=${RUN_SHORT_NAME}; use only letters, numbers, dot, underscore, or hyphen." >&2
   exit 2
 fi
 
@@ -128,10 +135,11 @@ export TOKENIZERS_PARALLELISM=false
 echo "Job ID: ${SLURM_JOB_ID:-NA}"
 echo "Run mode: ${RUN_MODE}"
 echo "Run tag: ${UCM_RUN_TAG:-default}"
+echo "Run short name: ${RUN_SHORT_NAME:-default}"
 echo "UCM source switches: disable_identifier=${UCM_DISABLE_IDENTIFIER_QUERY}, disable_import_api=${UCM_DISABLE_IMPORT_API_QUERY}, enable_path=${UCM_ENABLE_PATH_QUERY}"
 echo "UCM enhanced BM25: disabled=${UCM_DISABLE_ENHANCED_BM25}"
 echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
-echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}"
+echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}, same_file_direction=${UCM_GRAPH_SAME_FILE_DIRECTION}, identifier_query_only=${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}"
 echo "UCM graph scoring: seed_decay=${UCM_GRAPH_SEED_RANK_DECAY}, distance_decay=${UCM_GRAPH_DISTANCE_DECAY}, same_file_w=${UCM_GRAPH_SAME_FILE_WEIGHT}, identifier_w=${UCM_GRAPH_IDENTIFIER_WEIGHT}, import_w=${UCM_GRAPH_IMPORT_WEIGHT}, query_bonus=${UCM_GRAPH_QUERY_OVERLAP_BONUS}"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
@@ -151,6 +159,10 @@ COMMON_ARGS=(
   --retriever_batch_size_per_gpu "${RETRIEVER_BATCH_SIZE_PER_GPU}"
   --num_workers "${NUM_WORKERS}"
 )
+
+if [[ -n "${RUN_SHORT_NAME}" ]]; then
+  COMMON_ARGS+=(--run_short_name "${RUN_SHORT_NAME}")
+fi
 
 UCM_ARGS=(
   --enable_ucm
@@ -195,6 +207,7 @@ if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
     --ucm_graph_max_neighbors_per_seed "${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}"
     --ucm_graph_max_expanded "${UCM_GRAPH_MAX_EXPANDED}"
     --ucm_graph_identifier_max_df "${UCM_GRAPH_IDENTIFIER_MAX_DF}"
+    --ucm_graph_same_file_direction "${UCM_GRAPH_SAME_FILE_DIRECTION}"
     --ucm_graph_seed_rank_decay "${UCM_GRAPH_SEED_RANK_DECAY}"
     --ucm_graph_distance_decay "${UCM_GRAPH_DISTANCE_DECAY}"
     --ucm_graph_same_file_weight "${UCM_GRAPH_SAME_FILE_WEIGHT}"
@@ -202,6 +215,10 @@ if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
     --ucm_graph_import_weight "${UCM_GRAPH_IMPORT_WEIGHT}"
     --ucm_graph_query_overlap_bonus "${UCM_GRAPH_QUERY_OVERLAP_BONUS}"
   )
+fi
+
+if [[ "${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_identifier_query_only)
 fi
 
 if [[ "${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}" == "1" ]]; then

@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import re
 import torch
 import random
 import argparse
@@ -185,6 +186,14 @@ def _finalize_ucm_trace(args, dataset_name, trace_rows, retrieved_codeblocks):
 
 
 def _apply_ucm_output_suffix(args):
+    run_short_name = getattr(args, "run_short_name", "")
+    if run_short_name:
+        safe_name = _safe_run_short_name(run_short_name)
+        output_dir = args.output_dir.rstrip("/\\")
+        output_parent = os.path.dirname(output_dir) or "."
+        args.output_dir = os.path.join(output_parent, safe_name)
+        return
+
     if not (
         getattr(args, "enable_ucm", False)
         and getattr(args, "enable_multi_path_retrieval", False)
@@ -196,6 +205,66 @@ def _apply_ucm_output_suffix(args):
     basename = os.path.basename(output_dir)
     if suffix not in basename:
         args.output_dir = f"{output_dir}_{suffix}"
+
+
+def _safe_run_short_name(name):
+    if not re.match(r"^[A-Za-z0-9._-]+$", name):
+        raise ValueError("--run_short_name may only contain letters, numbers, dot, underscore, or hyphen")
+    return name
+
+
+def _write_run_config(args):
+    os.makedirs(args.output_dir, exist_ok=True)
+    graph_edges = []
+    if getattr(args, "enable_context_graph", False):
+        graph_edges.append("same_file")
+        if getattr(args, "ucm_graph_enable_identifier_edges", False):
+            graph_edges.append("identifier")
+        if getattr(args, "ucm_graph_enable_import_edges", False):
+            graph_edges.append("import_path")
+
+    query_views = ["base"]
+    if not getattr(args, "ucm_disable_identifier_query", False):
+        query_views.append("identifier")
+    if not getattr(args, "ucm_disable_import_api_query", False):
+        query_views.append("import_api")
+    if getattr(args, "ucm_enable_path_query", False):
+        query_views.append("path")
+
+    config = {
+        "run_short_name": getattr(args, "run_short_name", ""),
+        "output_dir": args.output_dir,
+        "queries": query_views,
+        "ucm": {
+            "enabled": getattr(args, "enable_ucm", False),
+            "multi_path_retrieval": getattr(args, "enable_multi_path_retrieval", False),
+            "base_topk": getattr(args, "ucm_base_topk", None),
+            "topk_per_path": getattr(args, "ucm_topk_per_path", None),
+            "path_topk": getattr(args, "ucm_path_topk", None),
+            "candidate_pool_size": getattr(args, "ucm_candidate_pool_size", None),
+            "enhanced_bm25": not getattr(args, "ucm_disable_enhanced_bm25", False),
+            "context_gate": getattr(args, "enable_context_gate", False),
+        },
+        "graph": {
+            "enabled": getattr(args, "enable_context_graph", False),
+            "edges": graph_edges,
+            "max_seed": getattr(args, "ucm_graph_max_seed", None),
+            "neighbors_per_seed": getattr(args, "ucm_graph_max_neighbors_per_seed", None),
+            "max_expanded": getattr(args, "ucm_graph_max_expanded", None),
+            "same_file_direction": getattr(args, "ucm_graph_same_file_direction", None),
+            "identifier_query_only": getattr(args, "ucm_graph_identifier_query_only", False),
+            "identifier_max_df": getattr(args, "ucm_graph_identifier_max_df", None),
+            "seed_rank_decay": getattr(args, "ucm_graph_seed_rank_decay", None),
+            "distance_decay": getattr(args, "ucm_graph_distance_decay", None),
+            "same_file_weight": getattr(args, "ucm_graph_same_file_weight", None),
+            "identifier_weight": getattr(args, "ucm_graph_identifier_weight", None),
+            "import_weight": getattr(args, "ucm_graph_import_weight", None),
+            "query_overlap_bonus": getattr(args, "ucm_graph_query_overlap_bonus", None),
+        },
+        "args": vars(args),
+    }
+    with open(os.path.join(args.output_dir, "run_config.json"), "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False, sort_keys=True)
 
 
 def _ucm_output_suffix(args):
@@ -620,6 +689,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--inference_type", default="baseline", type=str, help="Inference type")
     parser.add_argument("--output_dir", default="results/baseline", type=str, help="Output directory")
+    parser.add_argument("--run_short_name", default="", type=str, help="Optional short result directory name under the output parent directory")
     parser.add_argument("--eval", action="store_true", help="Perform evaluation")
     parser.add_argument("--enable_tqdm", action="store_true", help="Enable progress bar")
     parser.add_argument("--enable_generation", action="store_true", help="Enable generation")
@@ -658,6 +728,8 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_graph_enable_identifier_edges", action="store_true", help="Enable identifier-overlap graph edges")
     parser.add_argument("--ucm_graph_enable_import_edges", action="store_true", help="Enable import/path graph edges")
     parser.add_argument("--ucm_graph_identifier_max_df", default=20, type=int, help="Maximum per-task document frequency for identifier graph edges")
+    parser.add_argument("--ucm_graph_same_file_direction", default="both", choices=["both", "prev", "next"], help="Same-file graph neighbor direction")
+    parser.add_argument("--ucm_graph_identifier_query_only", action="store_true", help="Use only query-side identifiers for identifier graph expansion")
     parser.add_argument("--ucm_graph_seed_rank_decay", default=0.05, type=float, help="Decay applied to graph expansion candidates from lower-ranked seed blocks")
     parser.add_argument("--ucm_graph_distance_decay", default=0.75, type=float, help="Distance decay for same-file graph neighbors")
     parser.add_argument("--ucm_graph_same_file_weight", default=1.0, type=float, help="Base score weight for same-file graph edges")
@@ -682,6 +754,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     _apply_ucm_output_suffix(args)
     print("Output dir:", args.output_dir)
+    _write_run_config(args)
     args.generator_batch_size = args.generator_batch_size_per_gpu * torch.cuda.device_count()
     args.retriever_batch_size = args.retriever_batch_size_per_gpu * torch.cuda.device_count()
 
