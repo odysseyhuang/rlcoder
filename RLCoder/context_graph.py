@@ -6,6 +6,9 @@ from collections import Counter, defaultdict
 
 IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 IMPORT_RE = re.compile(r"^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import\s+(.+)|import\s+(.+)|package\s+([A-Za-z0-9_\.]+)|import\s+([A-Za-z0-9_\.]+)\s*;)")
+QUALIFIED_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)\s*\(")
+SIMPLE_CALL_RE = re.compile(r"(?<![\.\w])([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+NEW_CALL_RE = re.compile(r"\bnew\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 
 KEYWORDS = {
     "False", "None", "True", "abstract", "and", "as", "assert", "async",
@@ -34,7 +37,9 @@ class ContextGraphIndex:
         self.file_indices_by_task = {}
         self.identifier_index_by_task = {}
         self.path_index_by_task = {}
+        self.api_call_index_by_task = {}
         self.identifier_df_by_task = {}
+        self.api_call_df_by_task = {}
         self._build_positions()
 
     @classmethod
@@ -48,10 +53,13 @@ class ContextGraphIndex:
         max_total = max(0, getattr(args, "ucm_graph_max_expanded", 40))
         enable_identifier = getattr(args, "ucm_graph_enable_identifier_edges", False)
         enable_import = getattr(args, "ucm_graph_enable_import_edges", False)
+        enable_api_call = getattr(args, "ucm_graph_enable_api_call_edges", False)
         query_identifiers = set(_extract_identifiers(getattr(example, "left_context", "")))
         query_import_tokens = _extract_import_tokens(getattr(example, "left_context", ""))
+        query_api_tokens = _extract_api_call_tokens(getattr(example, "left_context", ""))
         same_file_direction = getattr(args, "ucm_graph_same_file_direction", "both")
         identifier_query_only = getattr(args, "ucm_graph_identifier_query_only", False)
+        api_call_query_only = getattr(args, "ucm_graph_api_call_query_only", False)
 
         seen = {block_key(block) for block in seed_blocks}
         proposals = {}
@@ -89,6 +97,16 @@ class ContextGraphIndex:
                         seed,
                         max_neighbors,
                         query_import_tokens,
+                        args,
+                    )
+                )
+            if enable_api_call:
+                neighbors.extend(
+                    self._api_call_neighbors(
+                        task_id,
+                        seed,
+                        max_neighbors,
+                        query_api_tokens,
                         args,
                     )
                 )
@@ -143,8 +161,10 @@ class ContextGraphIndex:
             "graph_seed_count": min(max_seed, len(seed_blocks)),
             "graph_query_identifier_count": len(query_identifiers),
             "graph_query_import_token_count": len(query_import_tokens),
+            "graph_query_api_call_count": len(query_api_tokens),
             "graph_same_file_direction": same_file_direction,
             "graph_identifier_query_only": identifier_query_only,
+            "graph_api_call_query_only": api_call_query_only,
             "graph_score_min": round(min(scores), 6) if scores else None,
             "graph_score_max": round(max(scores), 6) if scores else None,
             "graph_score_avg": round(sum(scores) / len(scores), 6) if scores else None,
@@ -273,8 +293,56 @@ class ContextGraphIndex:
         return [
             (
                 self.code_blocks_by_task[task_id][idx],
-                "graph_import",
+                "graph_import_path",
                 _import_score(score, args),
+                1,
+            )
+            for idx, score in ranked[:max_neighbors]
+        ]
+
+    def _api_call_neighbors(self, task_id, seed, max_neighbors, query_api_tokens, args):
+        if max_neighbors <= 0:
+            return []
+
+        self._ensure_api_call_index(task_id)
+        api_call_index = self.api_call_index_by_task.get(task_id, {})
+        api_call_df = self.api_call_df_by_task.get(task_id, {})
+        max_df = getattr(args, "ucm_graph_api_call_max_df", 20)
+
+        seed_tokens = [
+            token for token in _extract_api_call_tokens(getattr(seed, "code_content", ""))
+            if 1 < api_call_df.get(token, 0) <= max_df
+        ]
+        focused_tokens = [
+            token for token in seed_tokens
+            if token in query_api_tokens
+        ]
+        if getattr(args, "ucm_graph_api_call_query_only", False):
+            seed_tokens = focused_tokens
+        elif focused_tokens:
+            seed_tokens = focused_tokens
+        if not seed_tokens:
+            return []
+
+        seed_key = block_key(seed)
+        scores = Counter()
+        for token in seed_tokens[:32]:
+            df = max(1, api_call_df.get(token, 1))
+            low_df_bonus = 1.0 / df
+            for idx in api_call_index.get(token, []):
+                block = self.code_blocks_by_task[task_id][idx]
+                if block_key(block) == seed_key:
+                    continue
+                scores[idx] += 1.0 + low_df_bonus
+                if token in query_api_tokens:
+                    scores[idx] += getattr(args, "ucm_graph_query_api_bonus", 2)
+
+        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        return [
+            (
+                self.code_blocks_by_task[task_id][idx],
+                "graph_api_call",
+                _api_call_score(score, args),
                 1,
             )
             for idx, score in ranked[:max_neighbors]
@@ -305,6 +373,21 @@ class ContextGraphIndex:
                 path_index[token].append(idx)
 
         self.path_index_by_task[task_id] = dict(path_index)
+
+    def _ensure_api_call_index(self, task_id):
+        if task_id in self.api_call_index_by_task:
+            return
+
+        api_call_index = defaultdict(list)
+        api_call_df = Counter()
+        for idx, block in enumerate(self.code_blocks_by_task.get(task_id, [])):
+            api_tokens = set(_extract_api_call_tokens(getattr(block, "code_content", "")))
+            for token in api_tokens:
+                api_call_index[token].append(idx)
+                api_call_df[token] += 1
+
+        self.api_call_index_by_task[task_id] = dict(api_call_index)
+        self.api_call_df_by_task[task_id] = api_call_df
 
 
 def expand_context_graph_candidates(args, examples, task_bm25, candidate_codeblocks):
@@ -391,6 +474,11 @@ def _import_score(overlap_count, args):
     return base + max(0, overlap_count)
 
 
+def _api_call_score(overlap_count, args):
+    base = getattr(args, "ucm_graph_api_call_weight", 1.6)
+    return base + max(0, overlap_count)
+
+
 def _query_identifier_overlap(block, query_identifiers):
     if not query_identifiers:
         return 0.0
@@ -401,9 +489,10 @@ def _query_identifier_overlap(block, query_identifiers):
 
 def _graph_source_priority(source):
     return {
-        "graph_import": 0,
-        "graph_identifier": 1,
-        "graph_same_file": 2,
+        "graph_api_call": 0,
+        "graph_import_path": 1,
+        "graph_identifier": 2,
+        "graph_same_file": 3,
     }.get(source, 99)
 
 
@@ -433,10 +522,49 @@ def _extract_import_tokens(text):
                 continue
             for part in re.split(r"[,;\s]+", group):
                 part = part.strip()
-                if not part or part in {"as", "*"}:
+                if not part or part in {"as", "*"} or part in KEYWORDS:
                     continue
                 tokens.update(_module_tokens(part))
     return tokens
+
+
+def _extract_api_call_tokens(text):
+    tokens = []
+    seen = set()
+
+    for match in QUALIFIED_CALL_RE.finditer(text or ""):
+        qualified = match.group(1)
+        parts = qualified.split(".")
+        if not _valid_api_token(parts[-1]):
+            continue
+        if not all(_valid_api_token(part, allow_weak=True) for part in parts):
+            continue
+        _append_token(tokens, seen, qualified)
+        _append_token(tokens, seen, parts[-1])
+
+    for regex in (NEW_CALL_RE, SIMPLE_CALL_RE):
+        for match in regex.finditer(text or ""):
+            token = match.group(1)
+            if _valid_api_token(token):
+                _append_token(tokens, seen, token)
+
+    return tokens
+
+
+def _append_token(tokens, seen, token):
+    if token not in seen:
+        seen.add(token)
+        tokens.append(token)
+
+
+def _valid_api_token(token, allow_weak=False):
+    if not token or len(token) <= 2:
+        return False
+    if token in KEYWORDS:
+        return False
+    if not allow_weak and token in WEAK_IDENTIFIERS:
+        return False
+    return bool(IDENTIFIER_RE.fullmatch(token))
 
 
 def _path_tokens(file_path):

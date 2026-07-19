@@ -45,15 +45,20 @@ UCM_GRAPH_MAX_NEIGHBORS_PER_SEED="${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED:-2}"
 UCM_GRAPH_MAX_EXPANDED="${UCM_GRAPH_MAX_EXPANDED:-40}"
 UCM_GRAPH_ENABLE_IDENTIFIER_EDGES="${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES:-0}"
 UCM_GRAPH_ENABLE_IMPORT_EDGES="${UCM_GRAPH_ENABLE_IMPORT_EDGES:-0}"
+UCM_GRAPH_ENABLE_API_CALL_EDGES="${UCM_GRAPH_ENABLE_API_CALL_EDGES:-0}"
 UCM_GRAPH_IDENTIFIER_MAX_DF="${UCM_GRAPH_IDENTIFIER_MAX_DF:-20}"
+UCM_GRAPH_API_CALL_MAX_DF="${UCM_GRAPH_API_CALL_MAX_DF:-20}"
 UCM_GRAPH_SAME_FILE_DIRECTION="${UCM_GRAPH_SAME_FILE_DIRECTION:-both}"
 UCM_GRAPH_IDENTIFIER_QUERY_ONLY="${UCM_GRAPH_IDENTIFIER_QUERY_ONLY:-0}"
+UCM_GRAPH_API_CALL_QUERY_ONLY="${UCM_GRAPH_API_CALL_QUERY_ONLY:-0}"
 UCM_GRAPH_SEED_RANK_DECAY="${UCM_GRAPH_SEED_RANK_DECAY:-0.05}"
 UCM_GRAPH_DISTANCE_DECAY="${UCM_GRAPH_DISTANCE_DECAY:-0.75}"
 UCM_GRAPH_SAME_FILE_WEIGHT="${UCM_GRAPH_SAME_FILE_WEIGHT:-1.0}"
 UCM_GRAPH_IDENTIFIER_WEIGHT="${UCM_GRAPH_IDENTIFIER_WEIGHT:-1.2}"
 UCM_GRAPH_IMPORT_WEIGHT="${UCM_GRAPH_IMPORT_WEIGHT:-1.4}"
+UCM_GRAPH_API_CALL_WEIGHT="${UCM_GRAPH_API_CALL_WEIGHT:-1.6}"
 UCM_GRAPH_QUERY_OVERLAP_BONUS="${UCM_GRAPH_QUERY_OVERLAP_BONUS:-2}"
+UCM_GRAPH_QUERY_API_BONUS="${UCM_GRAPH_QUERY_API_BONUS:-2}"
 
 cd "${PROJECT_DIR}"
 mkdir -p log_infer result_infer
@@ -115,6 +120,9 @@ make_ucm_suffix() {
     if [[ "${UCM_GRAPH_ENABLE_IMPORT_EDGES}" == "1" ]]; then
       graph_part="${graph_part}_gimport"
     fi
+    if [[ "${UCM_GRAPH_ENABLE_API_CALL_EDGES}" == "1" ]]; then
+      graph_part="${graph_part}_gapi"
+    fi
   fi
 
   printf "%s_%s_%s_base%s_aux%s_pathk%s_pool%s_%s_%s%s" \
@@ -139,8 +147,8 @@ echo "Run short name: ${RUN_SHORT_NAME:-default}"
 echo "UCM source switches: disable_identifier=${UCM_DISABLE_IDENTIFIER_QUERY}, disable_import_api=${UCM_DISABLE_IMPORT_API_QUERY}, enable_path=${UCM_ENABLE_PATH_QUERY}"
 echo "UCM enhanced BM25: disabled=${UCM_DISABLE_ENHANCED_BM25}"
 echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
-echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}, same_file_direction=${UCM_GRAPH_SAME_FILE_DIRECTION}, identifier_query_only=${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}"
-echo "UCM graph scoring: seed_decay=${UCM_GRAPH_SEED_RANK_DECAY}, distance_decay=${UCM_GRAPH_DISTANCE_DECAY}, same_file_w=${UCM_GRAPH_SAME_FILE_WEIGHT}, identifier_w=${UCM_GRAPH_IDENTIFIER_WEIGHT}, import_w=${UCM_GRAPH_IMPORT_WEIGHT}, query_bonus=${UCM_GRAPH_QUERY_OVERLAP_BONUS}"
+echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}, api_call_edges=${UCM_GRAPH_ENABLE_API_CALL_EDGES}, same_file_direction=${UCM_GRAPH_SAME_FILE_DIRECTION}, identifier_query_only=${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}, api_call_query_only=${UCM_GRAPH_API_CALL_QUERY_ONLY}"
+echo "UCM graph scoring: seed_decay=${UCM_GRAPH_SEED_RANK_DECAY}, distance_decay=${UCM_GRAPH_DISTANCE_DECAY}, same_file_w=${UCM_GRAPH_SAME_FILE_WEIGHT}, identifier_w=${UCM_GRAPH_IDENTIFIER_WEIGHT}, import_w=${UCM_GRAPH_IMPORT_WEIGHT}, api_call_w=${UCM_GRAPH_API_CALL_WEIGHT}, query_bonus=${UCM_GRAPH_QUERY_OVERLAP_BONUS}, query_api_bonus=${UCM_GRAPH_QUERY_API_BONUS}"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 echo "Project dir: ${PROJECT_DIR}"
@@ -207,18 +215,25 @@ if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
     --ucm_graph_max_neighbors_per_seed "${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}"
     --ucm_graph_max_expanded "${UCM_GRAPH_MAX_EXPANDED}"
     --ucm_graph_identifier_max_df "${UCM_GRAPH_IDENTIFIER_MAX_DF}"
+    --ucm_graph_api_call_max_df "${UCM_GRAPH_API_CALL_MAX_DF}"
     --ucm_graph_same_file_direction "${UCM_GRAPH_SAME_FILE_DIRECTION}"
     --ucm_graph_seed_rank_decay "${UCM_GRAPH_SEED_RANK_DECAY}"
     --ucm_graph_distance_decay "${UCM_GRAPH_DISTANCE_DECAY}"
     --ucm_graph_same_file_weight "${UCM_GRAPH_SAME_FILE_WEIGHT}"
     --ucm_graph_identifier_weight "${UCM_GRAPH_IDENTIFIER_WEIGHT}"
     --ucm_graph_import_weight "${UCM_GRAPH_IMPORT_WEIGHT}"
+    --ucm_graph_api_call_weight "${UCM_GRAPH_API_CALL_WEIGHT}"
     --ucm_graph_query_overlap_bonus "${UCM_GRAPH_QUERY_OVERLAP_BONUS}"
+    --ucm_graph_query_api_bonus "${UCM_GRAPH_QUERY_API_BONUS}"
   )
 fi
 
 if [[ "${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}" == "1" ]]; then
   UCM_ARGS+=(--ucm_graph_identifier_query_only)
+fi
+
+if [[ "${UCM_GRAPH_API_CALL_QUERY_ONLY}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_api_call_query_only)
 fi
 
 if [[ "${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}" == "1" ]]; then
@@ -227,6 +242,10 @@ fi
 
 if [[ "${UCM_GRAPH_ENABLE_IMPORT_EDGES}" == "1" ]]; then
   UCM_ARGS+=(--ucm_graph_enable_import_edges)
+fi
+
+if [[ "${UCM_GRAPH_ENABLE_API_CALL_EDGES}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_enable_api_call_edges)
 fi
 
 case "${RUN_MODE}" in

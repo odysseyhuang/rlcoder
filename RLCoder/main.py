@@ -222,6 +222,8 @@ def _write_run_config(args):
             graph_edges.append("identifier")
         if getattr(args, "ucm_graph_enable_import_edges", False):
             graph_edges.append("import_path")
+        if getattr(args, "ucm_graph_enable_api_call_edges", False):
+            graph_edges.append("api_call")
 
     query_views = ["base"]
     if not getattr(args, "ucm_disable_identifier_query", False):
@@ -259,7 +261,11 @@ def _write_run_config(args):
             "same_file_weight": getattr(args, "ucm_graph_same_file_weight", None),
             "identifier_weight": getattr(args, "ucm_graph_identifier_weight", None),
             "import_weight": getattr(args, "ucm_graph_import_weight", None),
+            "api_call_weight": getattr(args, "ucm_graph_api_call_weight", None),
+            "api_call_max_df": getattr(args, "ucm_graph_api_call_max_df", None),
+            "api_call_query_only": getattr(args, "ucm_graph_api_call_query_only", False),
             "query_overlap_bonus": getattr(args, "ucm_graph_query_overlap_bonus", None),
+            "query_api_bonus": getattr(args, "ucm_graph_query_api_bonus", None),
         },
         "args": vars(args),
     }
@@ -298,6 +304,8 @@ def _ucm_output_suffix(args):
             graph_parts.append("gid")
         if getattr(args, "ucm_graph_enable_import_edges", False):
             graph_parts.append("gimport")
+        if getattr(args, "ucm_graph_enable_api_call_edges", False):
+            graph_parts.append("gapi")
         parts.append("_".join(graph_parts))
     return "_".join(parts)
 
@@ -727,15 +735,20 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_graph_max_expanded", default=40, type=int, help="Maximum total graph-expanded candidates per example")
     parser.add_argument("--ucm_graph_enable_identifier_edges", action="store_true", help="Enable identifier-overlap graph edges")
     parser.add_argument("--ucm_graph_enable_import_edges", action="store_true", help="Enable import/path graph edges")
+    parser.add_argument("--ucm_graph_enable_api_call_edges", action="store_true", help="Enable API/call-name graph edges")
     parser.add_argument("--ucm_graph_identifier_max_df", default=20, type=int, help="Maximum per-task document frequency for identifier graph edges")
+    parser.add_argument("--ucm_graph_api_call_max_df", default=20, type=int, help="Maximum per-task document frequency for API/call graph edges")
     parser.add_argument("--ucm_graph_same_file_direction", default="both", choices=["both", "prev", "next"], help="Same-file graph neighbor direction")
     parser.add_argument("--ucm_graph_identifier_query_only", action="store_true", help="Use only query-side identifiers for identifier graph expansion")
+    parser.add_argument("--ucm_graph_api_call_query_only", action="store_true", help="Use only query-side API/call tokens for API graph expansion")
     parser.add_argument("--ucm_graph_seed_rank_decay", default=0.05, type=float, help="Decay applied to graph expansion candidates from lower-ranked seed blocks")
     parser.add_argument("--ucm_graph_distance_decay", default=0.75, type=float, help="Distance decay for same-file graph neighbors")
     parser.add_argument("--ucm_graph_same_file_weight", default=1.0, type=float, help="Base score weight for same-file graph edges")
     parser.add_argument("--ucm_graph_identifier_weight", default=1.2, type=float, help="Base score weight for identifier-overlap graph edges")
     parser.add_argument("--ucm_graph_import_weight", default=1.4, type=float, help="Base score weight for import/path graph edges")
+    parser.add_argument("--ucm_graph_api_call_weight", default=1.6, type=float, help="Base score weight for API/call-name graph edges")
     parser.add_argument("--ucm_graph_query_overlap_bonus", default=2, type=int, help="Extra identifier graph score for tokens also present in the query context")
+    parser.add_argument("--ucm_graph_query_api_bonus", default=2, type=int, help="Extra API/call graph score for tokens also present in the query context")
 
     parser.add_argument("--do_codereval", action="store_true", help="Execute codereval evaluation in docker")
     parser.add_argument("--enable_forward_generation", action="store_true", help="Use progressive generation methods during inference")
