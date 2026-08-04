@@ -22,6 +22,8 @@ GENERATOR_MODEL="${GENERATOR_MODEL:-./models/deepseek-coder-6.7b-base}"
 RLCODER_MODEL="${RLCODER_MODEL:-./models/unixcoder-base}"
 
 GENERATOR_BATCH_SIZE_PER_GPU="${GENERATOR_BATCH_SIZE_PER_GPU:-8}"
+GENERATOR_MAX_CONTEXT_LENGTH="${GENERATOR_MAX_CONTEXT_LENGTH:-2048}"
+GENERATOR_MAX_CROSSFILE_LENGTH="${GENERATOR_MAX_CROSSFILE_LENGTH:-1536}"
 RETRIEVER_BATCH_SIZE_PER_GPU="${RETRIEVER_BATCH_SIZE_PER_GPU:-32}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 
@@ -71,6 +73,23 @@ if [[ -n "${RUN_SHORT_NAME}" && "${RUN_SHORT_NAME}" =~ [^A-Za-z0-9._-] ]]; then
   echo "Invalid RUN_SHORT_NAME=${RUN_SHORT_NAME}; use only letters, numbers, dot, underscore, or hyphen." >&2
   exit 2
 fi
+if [[ ! "${GENERATOR_MAX_CONTEXT_LENGTH}" =~ ^[0-9]+$ || "${GENERATOR_MAX_CONTEXT_LENGTH}" -le 0 ]]; then
+  echo "Invalid GENERATOR_MAX_CONTEXT_LENGTH=${GENERATOR_MAX_CONTEXT_LENGTH}; use a positive integer." >&2
+  exit 2
+fi
+if [[ ! "${GENERATOR_MAX_CROSSFILE_LENGTH}" =~ ^[0-9]+$ || "${GENERATOR_MAX_CROSSFILE_LENGTH}" -le 0 ]]; then
+  echo "Invalid GENERATOR_MAX_CROSSFILE_LENGTH=${GENERATOR_MAX_CROSSFILE_LENGTH}; use a positive integer." >&2
+  exit 2
+fi
+if [[ "${GENERATOR_MAX_CROSSFILE_LENGTH}" -ge "${GENERATOR_MAX_CONTEXT_LENGTH}" ]]; then
+  echo "GENERATOR_MAX_CROSSFILE_LENGTH must be smaller than GENERATOR_MAX_CONTEXT_LENGTH." >&2
+  exit 2
+fi
+
+make_generator_window_name() {
+  local infile_length=$((GENERATOR_MAX_CONTEXT_LENGTH - GENERATOR_MAX_CROSSFILE_LENGTH))
+  printf "crossfile_%s_infile_%s" "${GENERATOR_MAX_CROSSFILE_LENGTH}" "${infile_length}"
+}
 
 make_output_dir() {
   local base_dir="$1"
@@ -149,6 +168,7 @@ echo "UCM enhanced BM25: disabled=${UCM_DISABLE_ENHANCED_BM25}"
 echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
 echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}, api_call_edges=${UCM_GRAPH_ENABLE_API_CALL_EDGES}, same_file_direction=${UCM_GRAPH_SAME_FILE_DIRECTION}, identifier_query_only=${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}, api_call_query_only=${UCM_GRAPH_API_CALL_QUERY_ONLY}"
 echo "UCM graph scoring: seed_decay=${UCM_GRAPH_SEED_RANK_DECAY}, distance_decay=${UCM_GRAPH_DISTANCE_DECAY}, same_file_w=${UCM_GRAPH_SAME_FILE_WEIGHT}, identifier_w=${UCM_GRAPH_IDENTIFIER_WEIGHT}, import_w=${UCM_GRAPH_IMPORT_WEIGHT}, api_call_w=${UCM_GRAPH_API_CALL_WEIGHT}, query_bonus=${UCM_GRAPH_QUERY_OVERLAP_BONUS}, query_api_bonus=${UCM_GRAPH_QUERY_API_BONUS}"
+echo "Generator prompt window: context=${GENERATOR_MAX_CONTEXT_LENGTH}, crossfile=${GENERATOR_MAX_CROSSFILE_LENGTH}, infile=$((GENERATOR_MAX_CONTEXT_LENGTH - GENERATOR_MAX_CROSSFILE_LENGTH))"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 echo "Project dir: ${PROJECT_DIR}"
@@ -161,8 +181,8 @@ COMMON_ARGS=(
   --inference_type unixcoder_with_rl
   --retriever_model_path "${RETRIEVER_MODEL}"
   --generator_model_path "${GENERATOR_MODEL}"
-  --generator_max_crossfile_length 1536
-  --generator_max_context_length 2048
+  --generator_max_crossfile_length "${GENERATOR_MAX_CROSSFILE_LENGTH}"
+  --generator_max_context_length "${GENERATOR_MAX_CONTEXT_LENGTH}"
   --generator_batch_size_per_gpu "${GENERATOR_BATCH_SIZE_PER_GPU}"
   --retriever_batch_size_per_gpu "${RETRIEVER_BATCH_SIZE_PER_GPU}"
   --num_workers "${NUM_WORKERS}"
@@ -283,7 +303,7 @@ case "${RUN_MODE}" in
     ;;
 
   ucm_full)
-    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_deepseekcoder_7b_crossfile_1536_infile_512" 1)"
+    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_deepseekcoder_7b_$(make_generator_window_name)" 1)"
     echo "Output dir: ${OUTPUT_DIR}"
     conda run -p "${CONDA_ENV}" python main.py \
       "${COMMON_ARGS[@]}" \

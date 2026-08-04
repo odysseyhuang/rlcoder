@@ -41,7 +41,10 @@ class CustomDataset(Dataset):
         path_context = f"\n\n# file path: {example.file_path}\n\n"
         path_context = self.tokenizer.encode(path_context, add_special_tokens=False)
         allowed_prompt_length = self.args.generator_max_context_length - (len(crossfile_context)+len(path_context)+10)
-        infile_context = self.tokenizer.encode(example.left_context, add_special_tokens=False)[-allowed_prompt_length:]
+        if allowed_prompt_length > 0:
+            infile_context = self.tokenizer.encode(example.left_context, add_special_tokens=False)[-allowed_prompt_length:]
+        else:
+            infile_context = []
 
         prompt = self.tokenizer.decode(crossfile_context + path_context + infile_context)
         return prompt
