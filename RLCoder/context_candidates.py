@@ -92,6 +92,7 @@ def add_retrieval_trace_results(trace_rows, retrieved_codeblocks):
     for trace, candidates in zip(trace_rows, retrieved_codeblocks):
         trace["retrieved_sources"] = _retrieved_source_counts(candidates)
         trace["stop_rank"] = _find_stop_rank(candidates)
+        trace.update(_retrieved_graph_rerank_stats(candidates))
     return trace_rows
 
 
@@ -211,6 +212,40 @@ def _find_stop_rank(candidates):
         if _is_stop_block(candidate):
             return idx
     return None
+
+
+def _retrieved_graph_rerank_stats(candidates):
+    biases = []
+    retriever_scores = []
+    final_scores = []
+    for candidate in candidates:
+        if _is_stop_block(candidate):
+            break
+        bias = getattr(candidate, "_ucm_graph_rerank_bias", None)
+        retriever_score = getattr(candidate, "_ucm_retriever_score", None)
+        final_score = getattr(candidate, "_ucm_final_score", None)
+        if bias is not None:
+            biases.append(float(bias))
+        if retriever_score is not None:
+            retriever_scores.append(float(retriever_score))
+        if final_score is not None:
+            final_scores.append(float(final_score))
+
+    if not biases:
+        return {}
+
+    nonzero_biases = [bias for bias in biases if abs(bias) > 1e-12]
+    stats = {
+        "graph_rerank_bias_count": len(biases),
+        "graph_rerank_nonzero_bias_count": len(nonzero_biases),
+        "graph_rerank_bias_avg": round(sum(biases) / len(biases), 6),
+        "graph_rerank_bias_max": round(max(biases), 6),
+    }
+    if retriever_scores:
+        stats["retriever_score_avg"] = round(sum(retriever_scores) / len(retriever_scores), 6)
+    if final_scores:
+        stats["final_score_avg"] = round(sum(final_scores) / len(final_scores), 6)
+    return stats
 
 
 def _is_stop_block(candidate):

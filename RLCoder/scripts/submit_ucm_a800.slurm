@@ -61,6 +61,13 @@ UCM_GRAPH_IMPORT_WEIGHT="${UCM_GRAPH_IMPORT_WEIGHT:-1.4}"
 UCM_GRAPH_API_CALL_WEIGHT="${UCM_GRAPH_API_CALL_WEIGHT:-1.6}"
 UCM_GRAPH_QUERY_OVERLAP_BONUS="${UCM_GRAPH_QUERY_OVERLAP_BONUS:-2}"
 UCM_GRAPH_QUERY_API_BONUS="${UCM_GRAPH_QUERY_API_BONUS:-2}"
+UCM_GRAPH_ENABLE_RERANK="${UCM_GRAPH_ENABLE_RERANK:-0}"
+UCM_GRAPH_RERANK_ALPHA="${UCM_GRAPH_RERANK_ALPHA:-0.03}"
+UCM_GRAPH_SOURCE_PRIOR_SAME_FILE="${UCM_GRAPH_SOURCE_PRIOR_SAME_FILE:-0.02}"
+UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER="${UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER:-0.015}"
+UCM_GRAPH_SOURCE_PRIOR_IMPORT="${UCM_GRAPH_SOURCE_PRIOR_IMPORT:-0.005}"
+UCM_GRAPH_SOURCE_PRIOR_API_CALL="${UCM_GRAPH_SOURCE_PRIOR_API_CALL:-0.025}"
+UCM_GRAPH_DISTANCE_PENALTY="${UCM_GRAPH_DISTANCE_PENALTY:-0.005}"
 
 cd "${PROJECT_DIR}"
 mkdir -p log_infer result_infer
@@ -142,6 +149,9 @@ make_ucm_suffix() {
     if [[ "${UCM_GRAPH_ENABLE_API_CALL_EDGES}" == "1" ]]; then
       graph_part="${graph_part}_gapi"
     fi
+    if [[ "${UCM_GRAPH_ENABLE_RERANK}" == "1" ]]; then
+      graph_part="${graph_part}_rerank_a${UCM_GRAPH_RERANK_ALPHA}_d${UCM_GRAPH_DISTANCE_PENALTY}"
+    fi
   fi
 
   printf "%s_%s_%s_base%s_aux%s_pathk%s_pool%s_%s_%s%s" \
@@ -168,6 +178,7 @@ echo "UCM enhanced BM25: disabled=${UCM_DISABLE_ENHANCED_BM25}"
 echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
 echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}, api_call_edges=${UCM_GRAPH_ENABLE_API_CALL_EDGES}, same_file_direction=${UCM_GRAPH_SAME_FILE_DIRECTION}, identifier_query_only=${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}, api_call_query_only=${UCM_GRAPH_API_CALL_QUERY_ONLY}"
 echo "UCM graph scoring: seed_decay=${UCM_GRAPH_SEED_RANK_DECAY}, distance_decay=${UCM_GRAPH_DISTANCE_DECAY}, same_file_w=${UCM_GRAPH_SAME_FILE_WEIGHT}, identifier_w=${UCM_GRAPH_IDENTIFIER_WEIGHT}, import_w=${UCM_GRAPH_IMPORT_WEIGHT}, api_call_w=${UCM_GRAPH_API_CALL_WEIGHT}, query_bonus=${UCM_GRAPH_QUERY_OVERLAP_BONUS}, query_api_bonus=${UCM_GRAPH_QUERY_API_BONUS}"
+echo "UCM graph rerank: enable=${UCM_GRAPH_ENABLE_RERANK}, alpha=${UCM_GRAPH_RERANK_ALPHA}, same_file_prior=${UCM_GRAPH_SOURCE_PRIOR_SAME_FILE}, identifier_prior=${UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER}, import_prior=${UCM_GRAPH_SOURCE_PRIOR_IMPORT}, api_call_prior=${UCM_GRAPH_SOURCE_PRIOR_API_CALL}, distance_penalty=${UCM_GRAPH_DISTANCE_PENALTY}"
 echo "Generator prompt window: context=${GENERATOR_MAX_CONTEXT_LENGTH}, crossfile=${GENERATOR_MAX_CROSSFILE_LENGTH}, infile=$((GENERATOR_MAX_CONTEXT_LENGTH - GENERATOR_MAX_CROSSFILE_LENGTH))"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
@@ -245,7 +256,17 @@ if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
     --ucm_graph_api_call_weight "${UCM_GRAPH_API_CALL_WEIGHT}"
     --ucm_graph_query_overlap_bonus "${UCM_GRAPH_QUERY_OVERLAP_BONUS}"
     --ucm_graph_query_api_bonus "${UCM_GRAPH_QUERY_API_BONUS}"
+    --ucm_graph_rerank_alpha "${UCM_GRAPH_RERANK_ALPHA}"
+    --ucm_graph_source_prior_same_file "${UCM_GRAPH_SOURCE_PRIOR_SAME_FILE}"
+    --ucm_graph_source_prior_identifier "${UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER}"
+    --ucm_graph_source_prior_import "${UCM_GRAPH_SOURCE_PRIOR_IMPORT}"
+    --ucm_graph_source_prior_api_call "${UCM_GRAPH_SOURCE_PRIOR_API_CALL}"
+    --ucm_graph_distance_penalty "${UCM_GRAPH_DISTANCE_PENALTY}"
   )
+fi
+
+if [[ "${UCM_GRAPH_ENABLE_RERANK}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_enable_rerank)
 fi
 
 if [[ "${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}" == "1" ]]; then

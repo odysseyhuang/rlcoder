@@ -7,6 +7,14 @@ from datasets import CodeBlock
 from utils.model_utils import resolve_model_path
 
 
+GRAPH_SOURCE_NAMES = {
+    "graph_same_file",
+    "graph_identifier",
+    "graph_import_path",
+    "graph_api_call",
+}
+
+
 def tokenize(text, tokenizer, max_length, is_query, extracted_import=''):
     """
     Converts text to a list of token ids.
@@ -125,12 +133,82 @@ class Retriever(nn.Module):
                 topk_codeblocks.append([])  # If there are no candidates for this query, add an empty list
                 continue
             query_scores = scores[i][start_idx:start_idx+num_candidates]  # Get scores for the current query
-            topk_indices_query = query_scores.argsort()[-topk:][::-1]  # Get indices of top-k codeblocks
-            topk_codeblocks_query = [candidate_codeblocks[start_idx + idx] for idx in topk_indices_query]
+            query_candidates = candidate_codeblocks[start_idx:start_idx+num_candidates]
+            final_scores, graph_biases = _apply_graph_rerank_scores(self.args, query_scores, query_candidates)
+            topk_indices_query = final_scores.argsort()[-topk:][::-1]  # Get indices of top-k codeblocks
+            topk_codeblocks_query = []
+            for idx in topk_indices_query:
+                codeblock = candidate_codeblocks[start_idx + idx]
+                codeblock._ucm_retriever_score = float(query_scores[idx])
+                codeblock._ucm_final_score = float(final_scores[idx])
+                codeblock._ucm_graph_rerank_bias = float(graph_biases[idx])
+                topk_codeblocks_query.append(codeblock)
 
             if len(topk_codeblocks_query) < topk:
                 topk_codeblocks_query += [CodeBlock("","Don't need cross file context to completion", "", topk_codeblocks_query[0].language, '')] * (topk - len(topk_codeblocks_query))
             topk_codeblocks.append(topk_codeblocks_query)
             start_idx += num_candidates
         return topk_codeblocks
+
+
+def _apply_graph_rerank_scores(args, query_scores, query_candidates):
+    if not getattr(args, "ucm_graph_enable_rerank", False):
+        return query_scores, query_scores * 0.0
+
+    graph_norm_scores = _normalized_graph_scores(query_candidates)
+    graph_biases = query_scores * 0.0
+    alpha = getattr(args, "ucm_graph_rerank_alpha", 0.03)
+    distance_penalty = getattr(args, "ucm_graph_distance_penalty", 0.005)
+
+    for idx, candidate in enumerate(query_candidates):
+        graph_bias = alpha * graph_norm_scores[idx]
+        graph_bias += _graph_source_prior(args, candidate)
+        edge_distance = getattr(candidate, "_ucm_graph_edge_distance", None)
+        if edge_distance is not None:
+            graph_bias -= distance_penalty * max(0.0, float(edge_distance))
+        graph_biases[idx] = graph_bias
+
+    return query_scores + graph_biases, graph_biases
+
+
+def _normalized_graph_scores(query_candidates):
+    graph_scores = []
+    for candidate in query_candidates:
+        score = getattr(candidate, "_ucm_graph_score", None)
+        graph_scores.append(float(score) if score is not None else None)
+
+    valid_scores = [score for score in graph_scores if score is not None]
+    if not valid_scores:
+        return [0.0 for _ in query_candidates]
+
+    score_min = min(valid_scores)
+    score_max = max(valid_scores)
+    if score_max <= score_min:
+        return [1.0 if score is not None else 0.0 for score in graph_scores]
+
+    return [
+        (score - score_min) / (score_max - score_min) if score is not None else 0.0
+        for score in graph_scores
+    ]
+
+
+def _graph_source_prior(args, candidate):
+    priors = []
+    for source in _candidate_graph_sources(candidate):
+        if source == "graph_same_file":
+            priors.append(getattr(args, "ucm_graph_source_prior_same_file", 0.02))
+        elif source == "graph_identifier":
+            priors.append(getattr(args, "ucm_graph_source_prior_identifier", 0.015))
+        elif source == "graph_import_path":
+            priors.append(getattr(args, "ucm_graph_source_prior_import", 0.005))
+        elif source == "graph_api_call":
+            priors.append(getattr(args, "ucm_graph_source_prior_api_call", 0.025))
+    return max(priors) if priors else 0.0
+
+
+def _candidate_graph_sources(candidate):
+    sources = getattr(candidate, "_ucm_sources", None)
+    if not sources:
+        sources = (getattr(candidate, "_type", ""),)
+    return [source for source in sources if source in GRAPH_SOURCE_NAMES]
 

@@ -266,6 +266,15 @@ def _write_run_config(args):
             "api_call_query_only": getattr(args, "ucm_graph_api_call_query_only", False),
             "query_overlap_bonus": getattr(args, "ucm_graph_query_overlap_bonus", None),
             "query_api_bonus": getattr(args, "ucm_graph_query_api_bonus", None),
+            "rerank": {
+                "enabled": getattr(args, "ucm_graph_enable_rerank", False),
+                "alpha": getattr(args, "ucm_graph_rerank_alpha", None),
+                "source_prior_same_file": getattr(args, "ucm_graph_source_prior_same_file", None),
+                "source_prior_identifier": getattr(args, "ucm_graph_source_prior_identifier", None),
+                "source_prior_import": getattr(args, "ucm_graph_source_prior_import", None),
+                "source_prior_api_call": getattr(args, "ucm_graph_source_prior_api_call", None),
+                "distance_penalty": getattr(args, "ucm_graph_distance_penalty", None),
+            },
         },
         "args": vars(args),
     }
@@ -306,6 +315,12 @@ def _ucm_output_suffix(args):
             graph_parts.append("gimport")
         if getattr(args, "ucm_graph_enable_api_call_edges", False):
             graph_parts.append("gapi")
+        if getattr(args, "ucm_graph_enable_rerank", False):
+            graph_parts.append(
+                "rerank"
+                f"a{getattr(args, 'ucm_graph_rerank_alpha', 0.03)}"
+                f"d{getattr(args, 'ucm_graph_distance_penalty', 0.005)}"
+            )
         parts.append("_".join(graph_parts))
     return "_".join(parts)
 
@@ -749,6 +764,13 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_graph_api_call_weight", default=1.6, type=float, help="Base score weight for API/call-name graph edges")
     parser.add_argument("--ucm_graph_query_overlap_bonus", default=2, type=int, help="Extra identifier graph score for tokens also present in the query context")
     parser.add_argument("--ucm_graph_query_api_bonus", default=2, type=int, help="Extra API/call graph score for tokens also present in the query context")
+    parser.add_argument("--ucm_graph_enable_rerank", action="store_true", help="Enable graph-aware score fusion after RLRetriever cosine scoring")
+    parser.add_argument("--ucm_graph_rerank_alpha", default=0.03, type=float, help="Weight for normalized graph score in graph-aware reranking")
+    parser.add_argument("--ucm_graph_source_prior_same_file", default=0.02, type=float, help="Rerank prior for same-file graph candidates")
+    parser.add_argument("--ucm_graph_source_prior_identifier", default=0.015, type=float, help="Rerank prior for identifier graph candidates")
+    parser.add_argument("--ucm_graph_source_prior_import", default=0.005, type=float, help="Rerank prior for import/path graph candidates")
+    parser.add_argument("--ucm_graph_source_prior_api_call", default=0.025, type=float, help="Rerank prior for API/call graph candidates")
+    parser.add_argument("--ucm_graph_distance_penalty", default=0.005, type=float, help="Distance penalty for graph-aware reranking")
 
     parser.add_argument("--do_codereval", action="store_true", help="Execute codereval evaluation in docker")
     parser.add_argument("--enable_forward_generation", action="store_true", help="Use progressive generation methods during inference")
