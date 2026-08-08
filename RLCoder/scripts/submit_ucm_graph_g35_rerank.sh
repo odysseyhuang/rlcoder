@@ -11,6 +11,8 @@ BASE_SLURM="${SCRIPT_DIR}/submit_ucm_a800.slurm"
 
 COMMON_EXPORTS=(
   "RUN_MODE=ucm_full"
+  "GENERATOR_MAX_CONTEXT_LENGTH=4096"
+  "GENERATOR_MAX_CROSSFILE_LENGTH=3072"
   "UCM_BASE_TOPK=60"
   "UCM_TOPK_PER_PATH=30"
   "UCM_PATH_TOPK=5"
@@ -74,10 +76,10 @@ submit_case() {
   sbatch --export="ALL,${exports}" "${BASE_SLURM}"
 }
 
-submit_case "G3.5_B0_a1_repro" \
+submit_case "G3.5_B0_a1_repro_4k" \
   "UCM_GRAPH_ENABLE_RERANK=0"
 
-submit_case "G3.5_R1_graphscore" \
+submit_case "G3.5_R1_graphscore_4k" \
   "UCM_GRAPH_ENABLE_RERANK=1" \
   "UCM_GRAPH_RERANK_ALPHA=0.03" \
   "UCM_GRAPH_SOURCE_PRIOR_SAME_FILE=0" \
@@ -86,7 +88,7 @@ submit_case "G3.5_R1_graphscore" \
   "UCM_GRAPH_SOURCE_PRIOR_API_CALL=0" \
   "UCM_GRAPH_DISTANCE_PENALTY=0"
 
-submit_case "G3.5_R2_sourceprior" \
+submit_case "G3.5_R2_sourceprior_4k" \
   "UCM_GRAPH_ENABLE_RERANK=1" \
   "UCM_GRAPH_RERANK_ALPHA=0" \
   "UCM_GRAPH_SOURCE_PRIOR_SAME_FILE=0.02" \
@@ -95,13 +97,13 @@ submit_case "G3.5_R2_sourceprior" \
   "UCM_GRAPH_SOURCE_PRIOR_API_CALL=0.025" \
   "UCM_GRAPH_DISTANCE_PENALTY=0"
 
-submit_case "G3.5_R3_score_source" \
+submit_case "G3.5_R3_score_source_4k" \
   "UCM_GRAPH_ENABLE_RERANK=1"
 
-submit_case "G3.5_R4_score_source_dist" \
+submit_case "G3.5_R4_score_source_dist_4k" \
   "UCM_GRAPH_ENABLE_RERANK=1" \
   "UCM_GRAPH_DISTANCE_PENALTY=0.005"
 
-submit_case "G3.5_A3_R3_api_score_source" \
+submit_case "G3.5_A3_R3_api_score_source_4k" \
   "UCM_GRAPH_ENABLE_RERANK=1" \
   "UCM_GRAPH_ENABLE_API_CALL_EDGES=1"
