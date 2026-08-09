@@ -93,6 +93,7 @@ def add_retrieval_trace_results(trace_rows, retrieved_codeblocks):
         trace["retrieved_sources"] = _retrieved_source_counts(candidates)
         trace["stop_rank"] = _find_stop_rank(candidates)
         trace.update(_retrieved_graph_rerank_stats(candidates))
+        trace.update(_retrieved_typed_dependency_stats(candidates))
     return trace_rows
 
 
@@ -246,6 +247,40 @@ def _retrieved_graph_rerank_stats(candidates):
     if final_scores:
         stats["final_score_avg"] = round(sum(final_scores) / len(final_scores), 6)
     return stats
+
+
+def _retrieved_typed_dependency_stats(candidates):
+    relation_counts = Counter()
+    origin_counts = Counter()
+    matched_symbols = Counter()
+    graph_only_count = 0
+
+    for candidate in candidates:
+        if _is_stop_block(candidate):
+            break
+        relation = getattr(candidate, "_ucm_graph_relation", None)
+        if not relation or not relation.startswith("graph_typed_"):
+            continue
+        relation_counts[relation] += 1
+        origin = getattr(candidate, "_ucm_graph_origin", None)
+        if origin:
+            origin_counts[origin] += 1
+        matched_symbols.update(
+            getattr(candidate, "_ucm_graph_matched_symbols", ())
+        )
+        sources = tuple(getattr(candidate, "_ucm_sources", ()))
+        if sources and all(source.startswith("graph_") for source in sources):
+            graph_only_count += 1
+
+    if not relation_counts:
+        return {}
+    return {
+        "typed_dependency_retrieved": sum(relation_counts.values()),
+        "typed_dependency_graph_only_retrieved": graph_only_count,
+        "typed_dependency_retrieved_relations": dict(relation_counts),
+        "typed_dependency_retrieved_origins": dict(origin_counts),
+        "typed_dependency_retrieved_symbols": dict(matched_symbols),
+    }
 
 
 def _is_stop_block(candidate):

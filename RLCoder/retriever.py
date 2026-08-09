@@ -12,6 +12,9 @@ GRAPH_SOURCE_NAMES = {
     "graph_identifier",
     "graph_import_path",
     "graph_api_call",
+    "graph_typed_call",
+    "graph_typed_type",
+    "graph_typed_def_use",
 }
 
 
@@ -135,7 +138,13 @@ class Retriever(nn.Module):
             query_scores = scores[i][start_idx:start_idx+num_candidates]  # Get scores for the current query
             query_candidates = candidate_codeblocks[start_idx:start_idx+num_candidates]
             final_scores, graph_biases = _apply_graph_rerank_scores(self.args, query_scores, query_candidates)
-            topk_indices_query = final_scores.argsort()[-topk:][::-1]  # Get indices of top-k codeblocks
+            topk_indices_query = _select_topk_indices(
+                self.args,
+                final_scores,
+                query_candidates,
+                topk,
+                self.tokenizer,
+            )
             topk_codeblocks_query = []
             for idx in topk_indices_query:
                 codeblock = candidate_codeblocks[start_idx + idx]
@@ -211,4 +220,47 @@ def _candidate_graph_sources(candidate):
     if not sources:
         sources = (getattr(candidate, "_type", ""),)
     return [source for source in sources if source in GRAPH_SOURCE_NAMES]
+
+
+def _select_topk_indices(args, final_scores, candidates, topk, tokenizer=None):
+    ranked_indices = final_scores.argsort()[::-1]
+    max_graph_blocks = max(0, getattr(args, "ucm_graph_max_selected", 0))
+    max_graph_tokens = max(
+        0, getattr(args, "ucm_graph_max_selected_tokens", 0)
+    )
+    if max_graph_blocks == 0 and max_graph_tokens == 0:
+        return ranked_indices[:topk]
+
+    selected = []
+    selected_graph_blocks = 0
+    selected_graph_tokens = 0
+    for idx in ranked_indices:
+        candidate = candidates[idx]
+        if _is_graph_only_candidate(candidate):
+            if max_graph_blocks and selected_graph_blocks >= max_graph_blocks:
+                continue
+            candidate_tokens = 0
+            if max_graph_tokens and tokenizer is not None:
+                candidate_tokens = len(
+                    tokenizer.encode(str(candidate), add_special_tokens=False)
+                )
+                if selected_graph_tokens + candidate_tokens > max_graph_tokens:
+                    continue
+            selected_graph_blocks += 1
+            selected_graph_tokens += candidate_tokens
+
+        selected.append(idx)
+        if len(selected) >= topk:
+            break
+    return selected
+
+
+def _is_graph_only_candidate(candidate):
+    sources = getattr(candidate, "_ucm_sources", None)
+    if not sources:
+        sources = (getattr(candidate, "_type", ""),)
+    nonempty_sources = [source for source in sources if source]
+    return bool(nonempty_sources) and all(
+        source in GRAPH_SOURCE_NAMES for source in nonempty_sources
+    )
 

@@ -3,6 +3,8 @@ import os
 import re
 from collections import Counter, defaultdict
 
+from typed_dependency_graph import TypedDependencyIndex
+
 
 IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 IMPORT_RE = re.compile(r"^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import\s+(.+)|import\s+(.+)|package\s+([A-Za-z0-9_\.]+)|import\s+([A-Za-z0-9_\.]+)\s*;)")
@@ -40,6 +42,7 @@ class ContextGraphIndex:
         self.api_call_index_by_task = {}
         self.identifier_df_by_task = {}
         self.api_call_df_by_task = {}
+        self.typed_dependency_index = TypedDependencyIndex(code_blocks_by_task)
         self._build_positions()
 
     @classmethod
@@ -54,6 +57,10 @@ class ContextGraphIndex:
         enable_identifier = getattr(args, "ucm_graph_enable_identifier_edges", False)
         enable_import = getattr(args, "ucm_graph_enable_import_edges", False)
         enable_api_call = getattr(args, "ucm_graph_enable_api_call_edges", False)
+        enable_same_file = not getattr(args, "ucm_graph_disable_same_file_edges", False)
+        enable_typed_dependency = getattr(
+            args, "ucm_graph_enable_typed_dependency_edges", False
+        )
         query_identifiers = set(_extract_identifiers(getattr(example, "left_context", "")))
         query_import_tokens = _extract_import_tokens(getattr(example, "left_context", ""))
         query_api_tokens = _extract_api_call_tokens(getattr(example, "left_context", ""))
@@ -66,20 +73,59 @@ class ContextGraphIndex:
         proposed_counts = Counter()
         source_counts = Counter()
 
+        def add_proposals(neighbors, seed_rank, seed_weight):
+            for edge in neighbors:
+                neighbor, source, edge_score, edge_distance = edge[:4]
+                metadata = edge[4] if len(edge) > 4 else {}
+                key = block_key(neighbor)
+                is_typed = source.startswith("graph_typed_")
+                if key in seen and not is_typed:
+                    continue
+                proposed_counts[source] += 1
+                score = seed_weight * edge_score
+                prev = proposals.get(key)
+                if prev is None or score > prev["score"]:
+                    proposals[key] = {
+                        "block": neighbor,
+                        "source": source,
+                        "score": score,
+                        "seed_rank": seed_rank,
+                        "edge_distance": edge_distance,
+                        "metadata": metadata,
+                        "existing_candidate": key in seen,
+                    }
+
+        if enable_typed_dependency:
+            query_lines = max(
+                1, getattr(args, "ucm_graph_typed_query_context_lines", 80)
+            )
+            query_text = "\n".join(
+                getattr(example, "left_context", "").splitlines()[-query_lines:]
+            )
+            query_neighbors = self._typed_dependency_neighbors(
+                example,
+                query_text,
+                max(0, getattr(args, "ucm_graph_typed_query_max", 8)),
+                args,
+                origin="query",
+            )
+            add_proposals(query_neighbors, -1, 1.0)
+
         for seed_rank, seed in enumerate(seed_blocks[:max_seed]):
             if _is_stop_block(seed):
                 continue
 
             neighbors = []
-            neighbors.extend(
-                self._same_file_neighbors(
-                    task_id,
-                    seed,
-                    max_neighbors,
-                    query_identifiers,
-                    args,
+            if enable_same_file:
+                neighbors.extend(
+                    self._same_file_neighbors(
+                        task_id,
+                        seed,
+                        max_neighbors,
+                        query_identifiers,
+                        args,
+                    )
                 )
-            )
             if enable_identifier:
                 neighbors.extend(
                     self._identifier_neighbors(
@@ -110,23 +156,20 @@ class ContextGraphIndex:
                         args,
                     )
                 )
+            if enable_typed_dependency:
+                neighbors.extend(
+                    self._typed_dependency_neighbors(
+                        example,
+                        getattr(seed, "code_content", ""),
+                        max_neighbors,
+                        args,
+                        origin="seed",
+                        seed=seed,
+                    )
+                )
 
             seed_weight = _seed_rank_weight(seed_rank, args)
-            for neighbor, source, edge_score, edge_distance in neighbors:
-                key = block_key(neighbor)
-                if key in seen:
-                    continue
-                proposed_counts[source] += 1
-                score = seed_weight * edge_score
-                prev = proposals.get(key)
-                if prev is None or score > prev["score"]:
-                    proposals[key] = {
-                        "block": neighbor,
-                        "source": source,
-                        "score": score,
-                        "seed_rank": seed_rank,
-                        "edge_distance": edge_distance,
-                    }
+            add_proposals(neighbors, seed_rank, seed_weight)
 
         ranked = sorted(
             proposals.values(),
@@ -140,7 +183,12 @@ class ContextGraphIndex:
 
         selected = []
         scores = []
+        relation_counts = Counter()
+        origin_counts = Counter()
+        matched_symbols = Counter()
+        annotated_existing = 0
         for item in ranked[:max_total]:
+            metadata = item.get("metadata", {})
             selected.append(
                 _copy_graph_block(
                     item["block"],
@@ -148,16 +196,28 @@ class ContextGraphIndex:
                     item["seed_rank"],
                     item["score"],
                     item["edge_distance"],
+                    metadata,
                 )
             )
             source_counts[item["source"]] += 1
             scores.append(item["score"])
+            if item.get("existing_candidate"):
+                annotated_existing += 1
+            relation = metadata.get("relation")
+            if relation:
+                relation_counts[relation] += 1
+            origin = metadata.get("origin")
+            if origin:
+                origin_counts[origin] += 1
+            matched_symbols.update(metadata.get("matched_symbols", ()))
 
         trace = {
             "graph_expanded": len(selected),
             "graph_sources": dict(source_counts),
             "graph_proposed_sources": dict(proposed_counts),
             "graph_proposed_candidates": len(proposals),
+            "graph_new_candidates": len(selected) - annotated_existing,
+            "graph_annotated_existing": annotated_existing,
             "graph_seed_count": min(max_seed, len(seed_blocks)),
             "graph_query_identifier_count": len(query_identifiers),
             "graph_query_import_token_count": len(query_import_tokens),
@@ -165,11 +225,61 @@ class ContextGraphIndex:
             "graph_same_file_direction": same_file_direction,
             "graph_identifier_query_only": identifier_query_only,
             "graph_api_call_query_only": api_call_query_only,
+            "graph_typed_dependency_enabled": enable_typed_dependency,
+            "graph_typed_relations": dict(relation_counts),
+            "graph_typed_origins": dict(origin_counts),
+            "graph_typed_matched_symbols": dict(matched_symbols),
             "graph_score_min": round(min(scores), 6) if scores else None,
             "graph_score_max": round(max(scores), 6) if scores else None,
             "graph_score_avg": round(sum(scores) / len(scores), 6) if scores else None,
         }
         return selected, trace
+
+    def _typed_dependency_neighbors(
+        self,
+        example,
+        source_text,
+        max_results,
+        args,
+        origin,
+        seed=None,
+    ):
+        weights = {
+            "graph_typed_call": getattr(args, "ucm_graph_typed_call_weight", 1.8),
+            "graph_typed_type": getattr(args, "ucm_graph_typed_type_weight", 2.0),
+            "graph_typed_def_use": getattr(
+                args, "ucm_graph_typed_def_use_weight", 1.4
+            ),
+        }
+        exclude_file_path = ""
+        if not getattr(args, "ucm_graph_typed_allow_target_file", False):
+            exclude_file_path = getattr(example, "file_path", "")
+        matches = self.typed_dependency_index.neighbors(
+            example.task_id,
+            source_text,
+            getattr(example, "language", ""),
+            max_results=max_results,
+            max_df=max(1, getattr(args, "ucm_graph_typed_max_df", 12)),
+            weights=weights,
+            query_bonus=getattr(args, "ucm_graph_typed_query_bonus", 1.0),
+            origin=origin,
+            exclude_block_key=block_key(seed) if seed is not None else None,
+            exclude_file_path=exclude_file_path,
+        )
+        return [
+            (
+                match["block"],
+                match["relation"],
+                match["score"],
+                1,
+                {
+                    "relation": match["relation"],
+                    "matched_symbols": match["symbols"],
+                    "origin": match["origin"],
+                },
+            )
+            for match in matches
+        ]
 
     def _build_positions(self):
         for task_id, code_blocks in self.code_blocks_by_task.items():
@@ -432,24 +542,61 @@ def block_key(block):
 
 def _append_deduped(candidates, expanded):
     merged = list(candidates)
-    seen = {block_key(block) for block in merged}
+    by_key = {block_key(block): block for block in merged}
     for block in expanded:
         key = block_key(block)
-        if key in seen:
+        if key in by_key:
+            if getattr(block, "_type", "").startswith("graph_typed_"):
+                _merge_typed_graph_metadata(by_key[key], block)
             continue
-        seen.add(key)
+        by_key[key] = block
         merged.append(block)
     return merged
 
 
-def _copy_graph_block(block, source, seed_rank, score=None, edge_distance=None):
+def _copy_graph_block(
+    block,
+    source,
+    seed_rank,
+    score=None,
+    edge_distance=None,
+    metadata=None,
+):
     copied = copy.copy(block)
     copied._type = source
     copied._ucm_sources = (source,)
     copied._ucm_graph_seed_rank = seed_rank
     copied._ucm_graph_score = score
     copied._ucm_graph_edge_distance = edge_distance
+    metadata = metadata or {}
+    copied._ucm_graph_relation = metadata.get("relation")
+    copied._ucm_graph_matched_symbols = tuple(
+        metadata.get("matched_symbols", ())
+    )
+    copied._ucm_graph_origin = metadata.get("origin")
     return copied
+
+
+def _merge_typed_graph_metadata(target, source):
+    existing_sources = tuple(getattr(target, "_ucm_sources", ()))
+    typed_source = getattr(source, "_type", "")
+    if typed_source and typed_source not in existing_sources:
+        target._ucm_sources = existing_sources + (typed_source,)
+
+    existing_score = getattr(target, "_ucm_graph_score", None)
+    source_score = getattr(source, "_ucm_graph_score", None)
+    if existing_score is not None and source_score is not None and existing_score >= source_score:
+        return
+
+    for attr in (
+        "_ucm_graph_seed_rank",
+        "_ucm_graph_score",
+        "_ucm_graph_edge_distance",
+        "_ucm_graph_relation",
+        "_ucm_graph_matched_symbols",
+        "_ucm_graph_origin",
+    ):
+        setattr(target, attr, getattr(source, attr, None))
 
 
 def _seed_rank_weight(seed_rank, args):
@@ -489,10 +636,13 @@ def _query_identifier_overlap(block, query_identifiers):
 
 def _graph_source_priority(source):
     return {
-        "graph_api_call": 0,
-        "graph_import_path": 1,
-        "graph_identifier": 2,
-        "graph_same_file": 3,
+        "graph_typed_type": 0,
+        "graph_typed_call": 1,
+        "graph_typed_def_use": 2,
+        "graph_api_call": 3,
+        "graph_import_path": 4,
+        "graph_identifier": 5,
+        "graph_same_file": 6,
     }.get(source, 99)
 
 

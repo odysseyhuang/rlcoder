@@ -217,13 +217,16 @@ def _write_run_config(args):
     os.makedirs(args.output_dir, exist_ok=True)
     graph_edges = []
     if getattr(args, "enable_context_graph", False):
-        graph_edges.append("same_file")
+        if not getattr(args, "ucm_graph_disable_same_file_edges", False):
+            graph_edges.append("same_file")
         if getattr(args, "ucm_graph_enable_identifier_edges", False):
             graph_edges.append("identifier")
         if getattr(args, "ucm_graph_enable_import_edges", False):
             graph_edges.append("import_path")
         if getattr(args, "ucm_graph_enable_api_call_edges", False):
             graph_edges.append("api_call")
+        if getattr(args, "ucm_graph_enable_typed_dependency_edges", False):
+            graph_edges.append("typed_dependency")
 
     query_views = ["base"]
     if not getattr(args, "ucm_disable_identifier_query", False):
@@ -236,6 +239,7 @@ def _write_run_config(args):
     config = {
         "run_short_name": getattr(args, "run_short_name", ""),
         "output_dir": args.output_dir,
+        "eval_datasets": getattr(args, "eval_datasets", ""),
         "queries": query_views,
         "ucm": {
             "enabled": getattr(args, "enable_ucm", False),
@@ -266,6 +270,42 @@ def _write_run_config(args):
             "api_call_query_only": getattr(args, "ucm_graph_api_call_query_only", False),
             "query_overlap_bonus": getattr(args, "ucm_graph_query_overlap_bonus", None),
             "query_api_bonus": getattr(args, "ucm_graph_query_api_bonus", None),
+            "max_selected": getattr(args, "ucm_graph_max_selected", None),
+            "max_selected_tokens": getattr(
+                args, "ucm_graph_max_selected_tokens", None
+            ),
+            "show_relations_in_prompt": getattr(
+                args, "ucm_graph_show_relations_in_prompt", False
+            ),
+            "relation_max_symbols": getattr(
+                args, "ucm_graph_relation_max_symbols", None
+            ),
+            "typed_dependency": {
+                "enabled": getattr(
+                    args, "ucm_graph_enable_typed_dependency_edges", False
+                ),
+                "extractor": "ast_regex_v1",
+                "query_max": getattr(args, "ucm_graph_typed_query_max", None),
+                "query_context_lines": getattr(
+                    args, "ucm_graph_typed_query_context_lines", None
+                ),
+                "max_df": getattr(args, "ucm_graph_typed_max_df", None),
+                "query_bonus": getattr(
+                    args, "ucm_graph_typed_query_bonus", None
+                ),
+                "call_weight": getattr(
+                    args, "ucm_graph_typed_call_weight", None
+                ),
+                "type_weight": getattr(
+                    args, "ucm_graph_typed_type_weight", None
+                ),
+                "def_use_weight": getattr(
+                    args, "ucm_graph_typed_def_use_weight", None
+                ),
+                "allow_target_file": getattr(
+                    args, "ucm_graph_typed_allow_target_file", False
+                ),
+            },
             "rerank": {
                 "enabled": getattr(args, "ucm_graph_enable_rerank", False),
                 "alpha": getattr(args, "ucm_graph_rerank_alpha", None),
@@ -315,6 +355,13 @@ def _ucm_output_suffix(args):
             graph_parts.append("gimport")
         if getattr(args, "ucm_graph_enable_api_call_edges", False):
             graph_parts.append("gapi")
+        if getattr(args, "ucm_graph_enable_typed_dependency_edges", False):
+            graph_parts.append("gtyped")
+        max_selected = getattr(args, "ucm_graph_max_selected", 0)
+        if max_selected:
+            graph_parts.append(f"gcap{max_selected}")
+        if getattr(args, "ucm_graph_show_relations_in_prompt", False):
+            graph_parts.append("gvisible")
         if getattr(args, "ucm_graph_enable_rerank", False):
             graph_parts.append(
                 "rerank"
@@ -342,28 +389,59 @@ class CustomDataset(Dataset):
         candidate_tokens_id = [tokenize(str(x), self.tokenizer, self.max_candidate_length, False) for x in self.candidates[idx]]
         return torch.tensor(query_tokens_id, dtype=torch.long), torch.tensor(candidate_tokens_id, dtype=torch.long), torch.tensor(self.labels[idx], dtype=torch.long)
 
+EVAL_DATASET_ORDER = (
+    "github_eval",
+    "cceval_python",
+    "cceval_java",
+    "repoeval_line",
+    "repoeval_api",
+)
+
+
+def _load_selected_eval_examples(args):
+    requested = [
+        name.strip()
+        for name in getattr(args, "eval_datasets", "").split(",")
+        if name.strip()
+    ]
+    selected = requested or list(EVAL_DATASET_ORDER)
+    unknown = sorted(set(selected) - set(EVAL_DATASET_ORDER))
+    if unknown:
+        raise ValueError(
+            "Unknown --eval_datasets values: {}. Choose from: {}".format(
+                ", ".join(unknown), ", ".join(EVAL_DATASET_ORDER)
+            )
+        )
+
+    all_eval_examples = {}
+    training_raw_data = None
+    for name in EVAL_DATASET_ORDER:
+        if name not in selected:
+            continue
+        if name == "github_eval":
+            training_raw_data, eval_raw_data = load_train_and_valid_dataset()
+            all_eval_examples[name] = construct_dataset(
+                eval_raw_data, 100 if args.debug else 1000
+            )
+        elif name == "cceval_python":
+            all_eval_examples[name] = load_test_dataset(args, "cceval", "python")
+        elif name == "cceval_java":
+            all_eval_examples[name] = load_test_dataset(args, "cceval", "java")
+        elif name == "repoeval_line":
+            all_eval_examples[name] = load_test_dataset(
+                args, "repoeval", "line_level"
+            )
+        elif name == "repoeval_api":
+            all_eval_examples[name] = load_test_dataset(
+                args, "repoeval", "api_level"
+            )
+    return all_eval_examples, training_raw_data
+
+
 def run(args):
-    cceval_python_examples = load_test_dataset(args, "cceval", "python")
-    cceval_java_examples = load_test_dataset(args, "cceval", "java")
-    # codereval_python_examples = load_test_dataset(args, "codereval", "python")
-    # codereval_java_examples = load_test_dataset(args, "codereval", "java")
-    repoeval_line_examples = load_test_dataset(args, "repoeval", "line_level")
-    repoeval_api_examples = load_test_dataset(args, "repoeval", "api_level")
-    # repoeval_func_examples = load_test_dataset(args, "repoeval", "func_level")
-
-    training_raw_data, eval_raw_data = load_train_and_valid_dataset()
-    eval_all_examples = construct_dataset(eval_raw_data, 100 if args.debug else 1000)
-
-    all_eval_examples = {
-        "github_eval": eval_all_examples,
-        "cceval_python": cceval_python_examples,
-        "cceval_java": cceval_java_examples,
-        # "codereval_python": codereval_python_examples,
-        # "codereval_java": codereval_java_examples,
-        "repoeval_line": repoeval_line_examples,
-        "repoeval_api": repoeval_api_examples,
-        # "repoeval_func": repoeval_func_examples,
-    }
+    all_eval_examples, training_raw_data = _load_selected_eval_examples(args)
+    if not args.eval and training_raw_data is None:
+        training_raw_data, _ = load_train_and_valid_dataset()
 
 
     global generator
@@ -714,6 +792,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", default="results/baseline", type=str, help="Output directory")
     parser.add_argument("--run_short_name", default="", type=str, help="Optional short result directory name under the output parent directory")
     parser.add_argument("--eval", action="store_true", help="Perform evaluation")
+    parser.add_argument("--eval_datasets", default="", type=str, help="Optional comma-separated evaluation dataset names")
     parser.add_argument("--enable_tqdm", action="store_true", help="Enable progress bar")
     parser.add_argument("--enable_generation", action="store_true", help="Enable generation")
     parser.add_argument("--debug", action="store_true", help="Debug mode, use a small dataset")
@@ -748,9 +827,11 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_graph_max_seed", default=20, type=int, help="Maximum retrieved/merged seed candidates used for graph expansion")
     parser.add_argument("--ucm_graph_max_neighbors_per_seed", default=2, type=int, help="Maximum graph neighbors added for each seed candidate")
     parser.add_argument("--ucm_graph_max_expanded", default=40, type=int, help="Maximum total graph-expanded candidates per example")
+    parser.add_argument("--ucm_graph_disable_same_file_edges", action="store_true", help="Disable positional same-file graph edges")
     parser.add_argument("--ucm_graph_enable_identifier_edges", action="store_true", help="Enable identifier-overlap graph edges")
     parser.add_argument("--ucm_graph_enable_import_edges", action="store_true", help="Enable import/path graph edges")
     parser.add_argument("--ucm_graph_enable_api_call_edges", action="store_true", help="Enable API/call-name graph edges")
+    parser.add_argument("--ucm_graph_enable_typed_dependency_edges", action="store_true", help="Enable DDG-lite typed dependency edges backed by code definitions")
     parser.add_argument("--ucm_graph_identifier_max_df", default=20, type=int, help="Maximum per-task document frequency for identifier graph edges")
     parser.add_argument("--ucm_graph_api_call_max_df", default=20, type=int, help="Maximum per-task document frequency for API/call graph edges")
     parser.add_argument("--ucm_graph_same_file_direction", default="both", choices=["both", "prev", "next"], help="Same-file graph neighbor direction")
@@ -764,6 +845,18 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_graph_api_call_weight", default=1.6, type=float, help="Base score weight for API/call-name graph edges")
     parser.add_argument("--ucm_graph_query_overlap_bonus", default=2, type=int, help="Extra identifier graph score for tokens also present in the query context")
     parser.add_argument("--ucm_graph_query_api_bonus", default=2, type=int, help="Extra API/call graph score for tokens also present in the query context")
+    parser.add_argument("--ucm_graph_typed_query_max", default=8, type=int, help="Maximum direct query-to-definition typed dependency candidates")
+    parser.add_argument("--ucm_graph_typed_query_context_lines", default=80, type=int, help="Recent left-context lines used to build direct typed dependency requests")
+    parser.add_argument("--ucm_graph_typed_max_df", default=12, type=int, help="Maximum number of definition blocks allowed for a typed dependency symbol")
+    parser.add_argument("--ucm_graph_typed_query_bonus", default=1.0, type=float, help="Score bonus for typed dependencies originating directly from the query")
+    parser.add_argument("--ucm_graph_typed_call_weight", default=1.8, type=float, help="Base graph score for call-to-definition dependencies")
+    parser.add_argument("--ucm_graph_typed_type_weight", default=2.0, type=float, help="Base graph score for type-to-definition dependencies")
+    parser.add_argument("--ucm_graph_typed_def_use_weight", default=1.4, type=float, help="Base graph score for use-to-definition dependencies")
+    parser.add_argument("--ucm_graph_typed_allow_target_file", action="store_true", help="Allow typed dependency expansion into the target file; disabled by default to prevent leakage")
+    parser.add_argument("--ucm_graph_max_selected", default=0, type=int, help="Maximum graph-only blocks allowed in final Top-K; 0 disables the cap")
+    parser.add_argument("--ucm_graph_max_selected_tokens", default=0, type=int, help="Approximate retriever-token budget for graph-only blocks in final Top-K; 0 disables the cap")
+    parser.add_argument("--ucm_graph_show_relations_in_prompt", action="store_true", help="Expose typed dependency relation headers to the generator only")
+    parser.add_argument("--ucm_graph_relation_max_symbols", default=3, type=int, help="Maximum matched symbols shown in each dependency relation header")
     parser.add_argument("--ucm_graph_enable_rerank", action="store_true", help="Enable graph-aware score fusion after RLRetriever cosine scoring")
     parser.add_argument("--ucm_graph_rerank_alpha", default=0.03, type=float, help="Weight for normalized graph score in graph-aware reranking")
     parser.add_argument("--ucm_graph_source_prior_same_file", default=0.02, type=float, help="Rerank prior for same-file graph candidates")

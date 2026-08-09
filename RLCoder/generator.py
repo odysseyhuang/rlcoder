@@ -36,7 +36,9 @@ class CustomDataset(Dataset):
                 filter_codeblocks.append(x)
             else:
                 break
-        crossfile_context = "\n\n".join([str(retrieved_codeblock) for retrieved_codeblock in filter_codeblocks])
+        crossfile_context = "\n\n".join(
+            [self._render_codeblock(block) for block in filter_codeblocks]
+        )
         crossfile_context = self.tokenizer.encode(crossfile_context[:self.args.generator_max_crossfile_length*10], add_special_tokens=False)[:self.args.generator_max_crossfile_length]
         path_context = f"\n\n# file path: {example.file_path}\n\n"
         path_context = self.tokenizer.encode(path_context, add_special_tokens=False)
@@ -48,6 +50,33 @@ class CustomDataset(Dataset):
 
         prompt = self.tokenizer.decode(crossfile_context + path_context + infile_context)
         return prompt
+
+    def _render_codeblock(self, block):
+        block_text = str(block)
+        if not getattr(self.args, "ucm_graph_show_relations_in_prompt", False):
+            return block_text
+
+        relation = getattr(block, "_ucm_graph_relation", None)
+        symbols = getattr(block, "_ucm_graph_matched_symbols", ())
+        if not relation or not symbols:
+            return block_text
+
+        max_symbols = max(
+            1, getattr(self.args, "ucm_graph_relation_max_symbols", 3)
+        )
+        relation_label = {
+            "graph_typed_call": "calls",
+            "graph_typed_type": "uses type",
+            "graph_typed_def_use": "uses definition",
+        }.get(relation, relation)
+        origin = getattr(block, "_ucm_graph_origin", None) or "seed"
+        comment_label = "#" if block.language == "python" else "//"
+        symbol_text = ", ".join(symbols[:max_symbols])
+        dependency_header = (
+            f"{comment_label} dependency: {origin} --{relation_label}--> "
+            f"{symbol_text}"
+        )
+        return f"{dependency_header}\n{block_text}"
 
     def __getitem__(self, idx):
         example = self.examples[idx]

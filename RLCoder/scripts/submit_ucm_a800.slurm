@@ -16,6 +16,7 @@ CONDA_ENV="${CONDA_ENV:-/share/home/202421045349/conda_envs/rlcoder}"
 RUN_MODE="${RUN_MODE:-ucm_debug}"
 UCM_RUN_TAG="${UCM_RUN_TAG:-}"
 RUN_SHORT_NAME="${RUN_SHORT_NAME:-}"
+EVAL_DATASETS="${EVAL_DATASETS:-}"
 
 RETRIEVER_MODEL="${RETRIEVER_MODEL:-./models/RLRetriever}"
 GENERATOR_MODEL="${GENERATOR_MODEL:-./models/deepseek-coder-6.7b-base}"
@@ -45,9 +46,11 @@ UCM_ENABLE_CONTEXT_GRAPH="${UCM_ENABLE_CONTEXT_GRAPH:-0}"
 UCM_GRAPH_MAX_SEED="${UCM_GRAPH_MAX_SEED:-20}"
 UCM_GRAPH_MAX_NEIGHBORS_PER_SEED="${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED:-2}"
 UCM_GRAPH_MAX_EXPANDED="${UCM_GRAPH_MAX_EXPANDED:-40}"
+UCM_GRAPH_ENABLE_SAME_FILE_EDGES="${UCM_GRAPH_ENABLE_SAME_FILE_EDGES:-1}"
 UCM_GRAPH_ENABLE_IDENTIFIER_EDGES="${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES:-0}"
 UCM_GRAPH_ENABLE_IMPORT_EDGES="${UCM_GRAPH_ENABLE_IMPORT_EDGES:-0}"
 UCM_GRAPH_ENABLE_API_CALL_EDGES="${UCM_GRAPH_ENABLE_API_CALL_EDGES:-0}"
+UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES="${UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES:-0}"
 UCM_GRAPH_IDENTIFIER_MAX_DF="${UCM_GRAPH_IDENTIFIER_MAX_DF:-20}"
 UCM_GRAPH_API_CALL_MAX_DF="${UCM_GRAPH_API_CALL_MAX_DF:-20}"
 UCM_GRAPH_SAME_FILE_DIRECTION="${UCM_GRAPH_SAME_FILE_DIRECTION:-both}"
@@ -61,6 +64,18 @@ UCM_GRAPH_IMPORT_WEIGHT="${UCM_GRAPH_IMPORT_WEIGHT:-1.4}"
 UCM_GRAPH_API_CALL_WEIGHT="${UCM_GRAPH_API_CALL_WEIGHT:-1.6}"
 UCM_GRAPH_QUERY_OVERLAP_BONUS="${UCM_GRAPH_QUERY_OVERLAP_BONUS:-2}"
 UCM_GRAPH_QUERY_API_BONUS="${UCM_GRAPH_QUERY_API_BONUS:-2}"
+UCM_GRAPH_TYPED_QUERY_MAX="${UCM_GRAPH_TYPED_QUERY_MAX:-8}"
+UCM_GRAPH_TYPED_QUERY_CONTEXT_LINES="${UCM_GRAPH_TYPED_QUERY_CONTEXT_LINES:-80}"
+UCM_GRAPH_TYPED_MAX_DF="${UCM_GRAPH_TYPED_MAX_DF:-12}"
+UCM_GRAPH_TYPED_QUERY_BONUS="${UCM_GRAPH_TYPED_QUERY_BONUS:-1.0}"
+UCM_GRAPH_TYPED_CALL_WEIGHT="${UCM_GRAPH_TYPED_CALL_WEIGHT:-1.8}"
+UCM_GRAPH_TYPED_TYPE_WEIGHT="${UCM_GRAPH_TYPED_TYPE_WEIGHT:-2.0}"
+UCM_GRAPH_TYPED_DEF_USE_WEIGHT="${UCM_GRAPH_TYPED_DEF_USE_WEIGHT:-1.4}"
+UCM_GRAPH_TYPED_ALLOW_TARGET_FILE="${UCM_GRAPH_TYPED_ALLOW_TARGET_FILE:-0}"
+UCM_GRAPH_MAX_SELECTED="${UCM_GRAPH_MAX_SELECTED:-0}"
+UCM_GRAPH_MAX_SELECTED_TOKENS="${UCM_GRAPH_MAX_SELECTED_TOKENS:-0}"
+UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT="${UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT:-0}"
+UCM_GRAPH_RELATION_MAX_SYMBOLS="${UCM_GRAPH_RELATION_MAX_SYMBOLS:-3}"
 UCM_GRAPH_ENABLE_RERANK="${UCM_GRAPH_ENABLE_RERANK:-0}"
 UCM_GRAPH_RERANK_ALPHA="${UCM_GRAPH_RERANK_ALPHA:-0.03}"
 UCM_GRAPH_SOURCE_PRIOR_SAME_FILE="${UCM_GRAPH_SOURCE_PRIOR_SAME_FILE:-0.02}"
@@ -149,6 +164,12 @@ make_ucm_suffix() {
     if [[ "${UCM_GRAPH_ENABLE_API_CALL_EDGES}" == "1" ]]; then
       graph_part="${graph_part}_gapi"
     fi
+    if [[ "${UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES}" == "1" ]]; then
+      graph_part="${graph_part}_gtyped_cap${UCM_GRAPH_MAX_SELECTED}"
+    fi
+    if [[ "${UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT}" == "1" ]]; then
+      graph_part="${graph_part}_gvisible"
+    fi
     if [[ "${UCM_GRAPH_ENABLE_RERANK}" == "1" ]]; then
       graph_part="${graph_part}_rerank_a${UCM_GRAPH_RERANK_ALPHA}_d${UCM_GRAPH_DISTANCE_PENALTY}"
     fi
@@ -176,10 +197,12 @@ echo "Run short name: ${RUN_SHORT_NAME:-default}"
 echo "UCM source switches: disable_identifier=${UCM_DISABLE_IDENTIFIER_QUERY}, disable_import_api=${UCM_DISABLE_IMPORT_API_QUERY}, enable_path=${UCM_ENABLE_PATH_QUERY}"
 echo "UCM enhanced BM25: disabled=${UCM_DISABLE_ENHANCED_BM25}"
 echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
-echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}, api_call_edges=${UCM_GRAPH_ENABLE_API_CALL_EDGES}, same_file_direction=${UCM_GRAPH_SAME_FILE_DIRECTION}, identifier_query_only=${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}, api_call_query_only=${UCM_GRAPH_API_CALL_QUERY_ONLY}"
+echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, same_file_edges=${UCM_GRAPH_ENABLE_SAME_FILE_EDGES}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}, api_call_edges=${UCM_GRAPH_ENABLE_API_CALL_EDGES}, typed_dependency_edges=${UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES}, same_file_direction=${UCM_GRAPH_SAME_FILE_DIRECTION}, identifier_query_only=${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}, api_call_query_only=${UCM_GRAPH_API_CALL_QUERY_ONLY}"
 echo "UCM graph scoring: seed_decay=${UCM_GRAPH_SEED_RANK_DECAY}, distance_decay=${UCM_GRAPH_DISTANCE_DECAY}, same_file_w=${UCM_GRAPH_SAME_FILE_WEIGHT}, identifier_w=${UCM_GRAPH_IDENTIFIER_WEIGHT}, import_w=${UCM_GRAPH_IMPORT_WEIGHT}, api_call_w=${UCM_GRAPH_API_CALL_WEIGHT}, query_bonus=${UCM_GRAPH_QUERY_OVERLAP_BONUS}, query_api_bonus=${UCM_GRAPH_QUERY_API_BONUS}"
+echo "UCM typed dependency: query_max=${UCM_GRAPH_TYPED_QUERY_MAX}, query_lines=${UCM_GRAPH_TYPED_QUERY_CONTEXT_LINES}, max_df=${UCM_GRAPH_TYPED_MAX_DF}, query_bonus=${UCM_GRAPH_TYPED_QUERY_BONUS}, call_w=${UCM_GRAPH_TYPED_CALL_WEIGHT}, type_w=${UCM_GRAPH_TYPED_TYPE_WEIGHT}, def_use_w=${UCM_GRAPH_TYPED_DEF_USE_WEIGHT}, allow_target_file=${UCM_GRAPH_TYPED_ALLOW_TARGET_FILE}, max_selected=${UCM_GRAPH_MAX_SELECTED}, max_selected_tokens=${UCM_GRAPH_MAX_SELECTED_TOKENS}, prompt_relations=${UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT}"
 echo "UCM graph rerank: enable=${UCM_GRAPH_ENABLE_RERANK}, alpha=${UCM_GRAPH_RERANK_ALPHA}, same_file_prior=${UCM_GRAPH_SOURCE_PRIOR_SAME_FILE}, identifier_prior=${UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER}, import_prior=${UCM_GRAPH_SOURCE_PRIOR_IMPORT}, api_call_prior=${UCM_GRAPH_SOURCE_PRIOR_API_CALL}, distance_penalty=${UCM_GRAPH_DISTANCE_PENALTY}"
 echo "Generator prompt window: context=${GENERATOR_MAX_CONTEXT_LENGTH}, crossfile=${GENERATOR_MAX_CROSSFILE_LENGTH}, infile=$((GENERATOR_MAX_CONTEXT_LENGTH - GENERATOR_MAX_CROSSFILE_LENGTH))"
+echo "Evaluation datasets: ${EVAL_DATASETS:-all}"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 echo "Project dir: ${PROJECT_DIR}"
@@ -201,6 +224,10 @@ COMMON_ARGS=(
 
 if [[ -n "${RUN_SHORT_NAME}" ]]; then
   COMMON_ARGS+=(--run_short_name "${RUN_SHORT_NAME}")
+fi
+
+if [[ -n "${EVAL_DATASETS}" ]]; then
+  COMMON_ARGS+=(--eval_datasets "${EVAL_DATASETS}")
 fi
 
 UCM_ARGS=(
@@ -256,6 +283,16 @@ if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
     --ucm_graph_api_call_weight "${UCM_GRAPH_API_CALL_WEIGHT}"
     --ucm_graph_query_overlap_bonus "${UCM_GRAPH_QUERY_OVERLAP_BONUS}"
     --ucm_graph_query_api_bonus "${UCM_GRAPH_QUERY_API_BONUS}"
+    --ucm_graph_typed_query_max "${UCM_GRAPH_TYPED_QUERY_MAX}"
+    --ucm_graph_typed_query_context_lines "${UCM_GRAPH_TYPED_QUERY_CONTEXT_LINES}"
+    --ucm_graph_typed_max_df "${UCM_GRAPH_TYPED_MAX_DF}"
+    --ucm_graph_typed_query_bonus "${UCM_GRAPH_TYPED_QUERY_BONUS}"
+    --ucm_graph_typed_call_weight "${UCM_GRAPH_TYPED_CALL_WEIGHT}"
+    --ucm_graph_typed_type_weight "${UCM_GRAPH_TYPED_TYPE_WEIGHT}"
+    --ucm_graph_typed_def_use_weight "${UCM_GRAPH_TYPED_DEF_USE_WEIGHT}"
+    --ucm_graph_max_selected "${UCM_GRAPH_MAX_SELECTED}"
+    --ucm_graph_max_selected_tokens "${UCM_GRAPH_MAX_SELECTED_TOKENS}"
+    --ucm_graph_relation_max_symbols "${UCM_GRAPH_RELATION_MAX_SYMBOLS}"
     --ucm_graph_rerank_alpha "${UCM_GRAPH_RERANK_ALPHA}"
     --ucm_graph_source_prior_same_file "${UCM_GRAPH_SOURCE_PRIOR_SAME_FILE}"
     --ucm_graph_source_prior_identifier "${UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER}"
@@ -263,6 +300,10 @@ if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
     --ucm_graph_source_prior_api_call "${UCM_GRAPH_SOURCE_PRIOR_API_CALL}"
     --ucm_graph_distance_penalty "${UCM_GRAPH_DISTANCE_PENALTY}"
   )
+fi
+
+if [[ "${UCM_GRAPH_ENABLE_SAME_FILE_EDGES}" == "0" ]]; then
+  UCM_ARGS+=(--ucm_graph_disable_same_file_edges)
 fi
 
 if [[ "${UCM_GRAPH_ENABLE_RERANK}" == "1" ]]; then
@@ -287,6 +328,18 @@ fi
 
 if [[ "${UCM_GRAPH_ENABLE_API_CALL_EDGES}" == "1" ]]; then
   UCM_ARGS+=(--ucm_graph_enable_api_call_edges)
+fi
+
+if [[ "${UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_enable_typed_dependency_edges)
+fi
+
+if [[ "${UCM_GRAPH_TYPED_ALLOW_TARGET_FILE}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_typed_allow_target_file)
+fi
+
+if [[ "${UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_show_relations_in_prompt)
 fi
 
 case "${RUN_MODE}" in
