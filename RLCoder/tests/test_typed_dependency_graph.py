@@ -111,6 +111,48 @@ class TypedDependencyGraphTest(unittest.TestCase):
             any(match["block"].file_path == "src/Target.java" for match in matches)
         )
 
+    def test_relation_allowlist_filters_before_ranking(self):
+        task_id = "task/relation-filter"
+        definition = CodeBlock(
+            "src/UserService.java",
+            "service",
+            "public class UserService {\n"
+            "  public User findUser(String id) { return null; }\n"
+            "}",
+            "java",
+            "",
+        )
+        index = TypedDependencyIndex({task_id: [definition]})
+        common_kwargs = {
+            "max_results": 8,
+            "max_df": 12,
+            "weights": {
+                "graph_typed_call": 1.8,
+                "graph_typed_type": 2.0,
+                "graph_typed_def_use": 1.4,
+            },
+            "query_bonus": 1.0,
+            "origin": "query",
+        }
+
+        type_matches = index.neighbors(
+            task_id,
+            "UserService service = provider.findUser(id);",
+            "java",
+            allowed_relations={"graph_typed_type"},
+            **common_kwargs,
+        )
+        call_matches = index.neighbors(
+            task_id,
+            "UserService service = provider.findUser(id);",
+            "java",
+            allowed_relations={"graph_typed_call"},
+            **common_kwargs,
+        )
+
+        self.assertEqual(["graph_typed_type"], [m["relation"] for m in type_matches])
+        self.assertEqual(["graph_typed_call"], [m["relation"] for m in call_matches])
+
     def test_context_graph_records_typed_metadata(self):
         task_id = "task/2"
         definition = CodeBlock(
@@ -141,6 +183,7 @@ class TypedDependencyGraphTest(unittest.TestCase):
             ucm_graph_enable_import_edges=False,
             ucm_graph_enable_api_call_edges=False,
             ucm_graph_enable_typed_dependency_edges=True,
+            ucm_graph_typed_relation_mode="call_only",
             ucm_graph_typed_query_context_lines=80,
             ucm_graph_typed_query_max=8,
             ucm_graph_typed_max_df=12,
@@ -157,6 +200,7 @@ class TypedDependencyGraphTest(unittest.TestCase):
         self.assertEqual("graph_typed_call", expanded[0]._ucm_graph_relation)
         self.assertIn("loadUser", expanded[0]._ucm_graph_matched_symbols)
         self.assertEqual({"query": 1}, trace["graph_typed_origins"])
+        self.assertEqual("call_only", trace["graph_typed_relation_mode"])
 
 
 if __name__ == "__main__":

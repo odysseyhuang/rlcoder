@@ -7,6 +7,15 @@ from typed_dependency_graph import TypedDependencyIndex
 
 
 IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+
+TYPED_RELATIONS_BY_MODE = {
+    "all": frozenset(
+        {"graph_typed_type", "graph_typed_call", "graph_typed_def_use"}
+    ),
+    "type_only": frozenset({"graph_typed_type"}),
+    "call_only": frozenset({"graph_typed_call"}),
+    "def_use_only": frozenset({"graph_typed_def_use"}),
+}
 IMPORT_RE = re.compile(r"^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import\s+(.+)|import\s+(.+)|package\s+([A-Za-z0-9_\.]+)|import\s+([A-Za-z0-9_\.]+)\s*;)")
 QUALIFIED_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)\s*\(")
 SIMPLE_CALL_RE = re.compile(r"(?<![\.\w])([A-Za-z_][A-Za-z0-9_]*)\s*\(")
@@ -226,6 +235,9 @@ class ContextGraphIndex:
             "graph_identifier_query_only": identifier_query_only,
             "graph_api_call_query_only": api_call_query_only,
             "graph_typed_dependency_enabled": enable_typed_dependency,
+            "graph_typed_relation_mode": getattr(
+                args, "ucm_graph_typed_relation_mode", "all"
+            ),
             "graph_typed_relations": dict(relation_counts),
             "graph_typed_origins": dict(origin_counts),
             "graph_typed_matched_symbols": dict(matched_symbols),
@@ -244,6 +256,10 @@ class ContextGraphIndex:
         origin,
         seed=None,
     ):
+        relation_mode = getattr(args, "ucm_graph_typed_relation_mode", "all")
+        allowed_relations = TYPED_RELATIONS_BY_MODE.get(relation_mode)
+        if allowed_relations is None:
+            raise ValueError(f"Unknown typed dependency relation mode: {relation_mode}")
         weights = {
             "graph_typed_call": getattr(args, "ucm_graph_typed_call_weight", 1.8),
             "graph_typed_type": getattr(args, "ucm_graph_typed_type_weight", 2.0),
@@ -265,6 +281,7 @@ class ContextGraphIndex:
             origin=origin,
             exclude_block_key=block_key(seed) if seed is not None else None,
             exclude_file_path=exclude_file_path,
+            allowed_relations=allowed_relations,
         )
         return [
             (

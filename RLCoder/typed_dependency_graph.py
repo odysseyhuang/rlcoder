@@ -76,6 +76,7 @@ class TypedDependencyIndex:
         origin="seed",
         exclude_block_key=None,
         exclude_file_path="",
+        allowed_relations=None,
     ):
         if max_results <= 0:
             return []
@@ -96,6 +97,8 @@ class TypedDependencyIndex:
             ),
         )
         for relation, symbols, required_kinds in requests:
+            if allowed_relations is not None and relation not in allowed_relations:
+                continue
             for symbol in sorted(symbols):
                 entries = definition_index.get(symbol, [])
                 if not entries or len(entries) > max_df:

@@ -1,17 +1,39 @@
 #!/bin/bash
 set -euo pipefail
 
-# G4 DDG-lite pilot on CCEval Java and RepoEval Line.
+# Submit the G4 combined run and two typed-relation ablations.
 #
 # Usage:
-#   bash scripts/submit_ucm_graph_g4_ddg_lite.sh
+#   bash scripts/submit_ucm_graph_g4_d4_ablation.sh [--dry-run] [d4|type-only|call-only ...]
+#
+# EVAL_DATASETS uses ':' between dataset names because Slurm reserves commas
+# inside --export. The base job converts ':' back to ',' before invoking Python.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_SLURM="${SCRIPT_DIR}/submit_ucm_a800.slurm"
+DRY_RUN=0
+
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=1
+  shift
+fi
+
+if [[ "$#" -eq 0 ]]; then
+  CASES=(d4 type-only call-only)
+else
+  CASES=("$@")
+fi
+
+SUBMIT_EVAL_DATASETS="${EVAL_DATASETS:-cceval_java:repoeval_line}"
+if [[ "${SUBMIT_EVAL_DATASETS}" == *,* ]]; then
+  echo "EVAL_DATASETS must use ':' between names when submitted through Slurm." >&2
+  echo "Example: EVAL_DATASETS=cceval_java:repoeval_line" >&2
+  exit 2
+fi
 
 COMMON_EXPORTS=(
   "RUN_MODE=ucm_full"
-  "EVAL_DATASETS=cceval_java:repoeval_line"
+  "EVAL_DATASETS=${SUBMIT_EVAL_DATASETS}"
   "GENERATOR_MAX_CONTEXT_LENGTH=4096"
   "GENERATOR_MAX_CROSSFILE_LENGTH=3072"
   "UCM_BASE_TOPK=60"
@@ -32,6 +54,7 @@ COMMON_EXPORTS=(
   "UCM_GRAPH_ENABLE_IMPORT_EDGES=0"
   "UCM_GRAPH_ENABLE_API_CALL_EDGES=0"
   "UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES=1"
+  "UCM_GRAPH_TYPED_RELATION_MODE=all"
   "UCM_GRAPH_TYPED_QUERY_MAX=8"
   "UCM_GRAPH_TYPED_QUERY_CONTEXT_LINES=80"
   "UCM_GRAPH_TYPED_MAX_DF=12"
@@ -43,8 +66,8 @@ COMMON_EXPORTS=(
   "UCM_GRAPH_MAX_SELECTED=2"
   "UCM_GRAPH_MAX_SELECTED_TOKENS=768"
   "UCM_GRAPH_RELATION_MAX_SYMBOLS=3"
-  "UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT=0"
-  "UCM_GRAPH_ENABLE_RERANK=0"
+  "UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT=1"
+  "UCM_GRAPH_ENABLE_RERANK=1"
   "UCM_GRAPH_RERANK_ALPHA=0.03"
   "UCM_GRAPH_SOURCE_PRIOR_SAME_FILE=0"
   "UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER=0"
@@ -77,17 +100,31 @@ submit_case() {
   local exports
   exports="$(join_by_comma "${export_items[@]}")"
   echo "Submitting ${short_name}"
-  sbatch --export="ALL,${exports}" "${BASE_SLURM}"
+  echo "  datasets=${env_map[EVAL_DATASETS]} relation_mode=${env_map[UCM_GRAPH_TYPED_RELATION_MODE]} visible=${env_map[UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT]} rerank=${env_map[UCM_GRAPH_ENABLE_RERANK]}"
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    echo "  sbatch --export=ALL,<experiment-config> ${BASE_SLURM}"
+  else
+    sbatch --export="ALL,${exports}" "${BASE_SLURM}"
+  fi
 }
 
-# D1 isolates typed dependency candidate recall under a fixed graph budget.
-submit_case "G4_D1_ddg_lite_recall_java_line_4k"
-
-# D2 uses the exact D1 retrieval configuration and only exposes relation headers
-# to the generator.
-submit_case "G4_D2_ddg_lite_visible_java_line_4k" \
-  "UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT=1"
-
-# D3 uses the exact D1 prompt and adds graph-score fusion only.
-submit_case "G4_D3_ddg_lite_rerank_java_line_4k" \
-  "UCM_GRAPH_ENABLE_RERANK=1"
+for case_name in "${CASES[@]}"; do
+  case "${case_name}" in
+    d4)
+      submit_case "G4_D4_ddg_lite_visible_rerank_java_line_4k"
+      ;;
+    type-only)
+      submit_case "G4_D5_ddg_lite_type_only_visible_rerank_java_line_4k" \
+        "UCM_GRAPH_TYPED_RELATION_MODE=type_only"
+      ;;
+    call-only)
+      submit_case "G4_D6_ddg_lite_call_only_visible_rerank_java_line_4k" \
+        "UCM_GRAPH_TYPED_RELATION_MODE=call_only"
+      ;;
+    *)
+      echo "Unknown case: ${case_name}" >&2
+      echo "Choose from: d4, type-only, call-only" >&2
+      exit 2
+      ;;
+  esac
+done

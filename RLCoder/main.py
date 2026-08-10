@@ -285,6 +285,9 @@ def _write_run_config(args):
                     args, "ucm_graph_enable_typed_dependency_edges", False
                 ),
                 "extractor": "ast_regex_v1",
+                "relation_mode": getattr(
+                    args, "ucm_graph_typed_relation_mode", "all"
+                ),
                 "query_max": getattr(args, "ucm_graph_typed_query_max", None),
                 "query_context_lines": getattr(
                     args, "ucm_graph_typed_query_context_lines", None
@@ -357,6 +360,9 @@ def _ucm_output_suffix(args):
             graph_parts.append("gapi")
         if getattr(args, "ucm_graph_enable_typed_dependency_edges", False):
             graph_parts.append("gtyped")
+            relation_mode = getattr(args, "ucm_graph_typed_relation_mode", "all")
+            if relation_mode != "all":
+                graph_parts.append(relation_mode)
         max_selected = getattr(args, "ucm_graph_max_selected", 0)
         if max_selected:
             graph_parts.append(f"gcap{max_selected}")
@@ -832,6 +838,7 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_graph_enable_import_edges", action="store_true", help="Enable import/path graph edges")
     parser.add_argument("--ucm_graph_enable_api_call_edges", action="store_true", help="Enable API/call-name graph edges")
     parser.add_argument("--ucm_graph_enable_typed_dependency_edges", action="store_true", help="Enable DDG-lite typed dependency edges backed by code definitions")
+    parser.add_argument("--ucm_graph_typed_relation_mode", default="all", choices=["all", "type_only", "call_only", "def_use_only"], help="Typed dependency relations enabled during graph expansion")
     parser.add_argument("--ucm_graph_identifier_max_df", default=20, type=int, help="Maximum per-task document frequency for identifier graph edges")
     parser.add_argument("--ucm_graph_api_call_max_df", default=20, type=int, help="Maximum per-task document frequency for API/call graph edges")
     parser.add_argument("--ucm_graph_same_file_direction", default="both", choices=["both", "prev", "next"], help="Same-file graph neighbor direction")
