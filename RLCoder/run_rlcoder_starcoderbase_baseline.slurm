@@ -13,7 +13,14 @@ set -euo pipefail
 
 PROJECT_DIR="/share/home/202421045349/projects/RLCoder/RLCoder"
 CONDA_ENV="/share/home/202421045349/conda_envs/rlcoder"
-OUTPUT_DIR="result_infer/RLCoder_starcoderbase_7b_crossfile_1536_infile_512"
+GENERATOR_MAX_CONTEXT_LENGTH="${GENERATOR_MAX_CONTEXT_LENGTH:-4096}"
+GENERATOR_MAX_CROSSFILE_LENGTH="${GENERATOR_MAX_CROSSFILE_LENGTH:-3072}"
+GENERATOR_MAX_GENERATION_LENGTH="${GENERATOR_MAX_GENERATION_LENGTH:-64}"
+RETRIEVER_QUERY_CONTEXT_LENGTH="${RETRIEVER_QUERY_CONTEXT_LENGTH:-256}"
+RETRIEVER_CANDIDATE_CONTEXT_LENGTH="${RETRIEVER_CANDIDATE_CONTEXT_LENGTH:-512}"
+SAMPLE_NUMBER="${SAMPLE_NUMBER:-10}"
+INFILE_LENGTH=$((GENERATOR_MAX_CONTEXT_LENGTH - GENERATOR_MAX_CROSSFILE_LENGTH))
+OUTPUT_DIR="result_infer/RLCoder_starcoderbase_7b_crossfile_${GENERATOR_MAX_CROSSFILE_LENGTH}_infile_${INFILE_LENGTH}"
 
 cd "${PROJECT_DIR}"
 mkdir -p log_infer "${OUTPUT_DIR}"
@@ -23,6 +30,9 @@ export TOKENIZERS_PARALLELISM=false
 echo "Job ID: ${SLURM_JOB_ID:-NA}"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
+echo "Generator model: ./models/starcoderbase-7b"
+echo "Generator prompt window: context=${GENERATOR_MAX_CONTEXT_LENGTH}, crossfile=${GENERATOR_MAX_CROSSFILE_LENGTH}, infile=${INFILE_LENGTH}"
+echo "Generation/retrieval budget: generation=${GENERATOR_MAX_GENERATION_LENGTH}, retriever_query=${RETRIEVER_QUERY_CONTEXT_LENGTH}, retriever_candidate=${RETRIEVER_CANDIDATE_CONTEXT_LENGTH}, sample/topk=${SAMPLE_NUMBER}"
 echo "Start time: $(date)"
 
 conda run -p "${CONDA_ENV}" python -c \
@@ -35,10 +45,14 @@ conda run -p "${CONDA_ENV}" python main.py \
   --inference_type unixcoder_with_rl \
   --retriever_model_path ./models/RLRetriever \
   --generator_model_path ./models/starcoderbase-7b \
-  --generator_max_crossfile_length 1536 \
-  --generator_max_context_length 2048 \
+  --generator_max_crossfile_length "${GENERATOR_MAX_CROSSFILE_LENGTH}" \
+  --generator_max_context_length "${GENERATOR_MAX_CONTEXT_LENGTH}" \
+  --generator_max_generation_length "${GENERATOR_MAX_GENERATION_LENGTH}" \
   --generator_batch_size_per_gpu 8 \
+  --retriever_query_context_length "${RETRIEVER_QUERY_CONTEXT_LENGTH}" \
+  --retriever_candidate_context_length "${RETRIEVER_CANDIDATE_CONTEXT_LENGTH}" \
   --retriever_batch_size_per_gpu 32 \
+  --sample_number "${SAMPLE_NUMBER}" \
   --num_workers 6 \
   --output_dir "${OUTPUT_DIR}"
 

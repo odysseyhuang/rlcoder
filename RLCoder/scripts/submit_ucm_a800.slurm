@@ -21,12 +21,17 @@ EVAL_DATASETS_ARG="${EVAL_DATASETS//:/,}"
 
 RETRIEVER_MODEL="${RETRIEVER_MODEL:-./models/RLRetriever}"
 GENERATOR_MODEL="${GENERATOR_MODEL:-./models/deepseek-coder-6.7b-base}"
+GENERATOR_ALIAS="${GENERATOR_ALIAS:-deepseekcoder_7b}"
 RLCODER_MODEL="${RLCODER_MODEL:-./models/unixcoder-base}"
 
 GENERATOR_BATCH_SIZE_PER_GPU="${GENERATOR_BATCH_SIZE_PER_GPU:-8}"
-GENERATOR_MAX_CONTEXT_LENGTH="${GENERATOR_MAX_CONTEXT_LENGTH:-2048}"
-GENERATOR_MAX_CROSSFILE_LENGTH="${GENERATOR_MAX_CROSSFILE_LENGTH:-1536}"
+GENERATOR_MAX_CONTEXT_LENGTH="${GENERATOR_MAX_CONTEXT_LENGTH:-4096}"
+GENERATOR_MAX_CROSSFILE_LENGTH="${GENERATOR_MAX_CROSSFILE_LENGTH:-3072}"
+GENERATOR_MAX_GENERATION_LENGTH="${GENERATOR_MAX_GENERATION_LENGTH:-64}"
 RETRIEVER_BATCH_SIZE_PER_GPU="${RETRIEVER_BATCH_SIZE_PER_GPU:-32}"
+RETRIEVER_QUERY_CONTEXT_LENGTH="${RETRIEVER_QUERY_CONTEXT_LENGTH:-256}"
+RETRIEVER_CANDIDATE_CONTEXT_LENGTH="${RETRIEVER_CANDIDATE_CONTEXT_LENGTH:-512}"
+SAMPLE_NUMBER="${SAMPLE_NUMBER:-10}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 
 UCM_BASE_TOPK="${UCM_BASE_TOPK:-60}"
@@ -95,6 +100,10 @@ if [[ -n "${UCM_RUN_TAG}" && "${UCM_RUN_TAG}" =~ [^A-Za-z0-9._-] ]]; then
 fi
 if [[ -n "${RUN_SHORT_NAME}" && "${RUN_SHORT_NAME}" =~ [^A-Za-z0-9._-] ]]; then
   echo "Invalid RUN_SHORT_NAME=${RUN_SHORT_NAME}; use only letters, numbers, dot, underscore, or hyphen." >&2
+  exit 2
+fi
+if [[ -n "${GENERATOR_ALIAS}" && "${GENERATOR_ALIAS}" =~ [^A-Za-z0-9._-] ]]; then
+  echo "Invalid GENERATOR_ALIAS=${GENERATOR_ALIAS}; use only letters, numbers, dot, underscore, or hyphen." >&2
   exit 2
 fi
 if [[ ! "${GENERATOR_MAX_CONTEXT_LENGTH}" =~ ^[0-9]+$ || "${GENERATOR_MAX_CONTEXT_LENGTH}" -le 0 ]]; then
@@ -207,6 +216,8 @@ echo "Job ID: ${SLURM_JOB_ID:-NA}"
 echo "Run mode: ${RUN_MODE}"
 echo "Run tag: ${UCM_RUN_TAG:-default}"
 echo "Run short name: ${RUN_SHORT_NAME:-default}"
+echo "Generator model alias: ${GENERATOR_ALIAS}"
+echo "Generator model path: ${GENERATOR_MODEL}"
 echo "UCM source switches: disable_identifier=${UCM_DISABLE_IDENTIFIER_QUERY}, disable_import_api=${UCM_DISABLE_IMPORT_API_QUERY}, enable_path=${UCM_ENABLE_PATH_QUERY}"
 echo "UCM enhanced BM25: disabled=${UCM_DISABLE_ENHANCED_BM25}"
 echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
@@ -215,6 +226,7 @@ echo "UCM graph scoring: seed_decay=${UCM_GRAPH_SEED_RANK_DECAY}, distance_decay
 echo "UCM typed dependency: relation_mode=${UCM_GRAPH_TYPED_RELATION_MODE}, query_max=${UCM_GRAPH_TYPED_QUERY_MAX}, query_lines=${UCM_GRAPH_TYPED_QUERY_CONTEXT_LINES}, max_df=${UCM_GRAPH_TYPED_MAX_DF}, query_bonus=${UCM_GRAPH_TYPED_QUERY_BONUS}, call_w=${UCM_GRAPH_TYPED_CALL_WEIGHT}, type_w=${UCM_GRAPH_TYPED_TYPE_WEIGHT}, def_use_w=${UCM_GRAPH_TYPED_DEF_USE_WEIGHT}, allow_target_file=${UCM_GRAPH_TYPED_ALLOW_TARGET_FILE}, max_selected=${UCM_GRAPH_MAX_SELECTED}, max_selected_tokens=${UCM_GRAPH_MAX_SELECTED_TOKENS}, prompt_relations=${UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT}"
 echo "UCM graph rerank: enable=${UCM_GRAPH_ENABLE_RERANK}, alpha=${UCM_GRAPH_RERANK_ALPHA}, same_file_prior=${UCM_GRAPH_SOURCE_PRIOR_SAME_FILE}, identifier_prior=${UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER}, import_prior=${UCM_GRAPH_SOURCE_PRIOR_IMPORT}, api_call_prior=${UCM_GRAPH_SOURCE_PRIOR_API_CALL}, distance_penalty=${UCM_GRAPH_DISTANCE_PENALTY}"
 echo "Generator prompt window: context=${GENERATOR_MAX_CONTEXT_LENGTH}, crossfile=${GENERATOR_MAX_CROSSFILE_LENGTH}, infile=$((GENERATOR_MAX_CONTEXT_LENGTH - GENERATOR_MAX_CROSSFILE_LENGTH))"
+echo "Generation/retrieval budget: generation=${GENERATOR_MAX_GENERATION_LENGTH}, retriever_query=${RETRIEVER_QUERY_CONTEXT_LENGTH}, retriever_candidate=${RETRIEVER_CANDIDATE_CONTEXT_LENGTH}, sample/topk=${SAMPLE_NUMBER}"
 echo "Evaluation datasets: ${EVAL_DATASETS_ARG:-all}"
 echo "Node: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
@@ -230,8 +242,12 @@ COMMON_ARGS=(
   --generator_model_path "${GENERATOR_MODEL}"
   --generator_max_crossfile_length "${GENERATOR_MAX_CROSSFILE_LENGTH}"
   --generator_max_context_length "${GENERATOR_MAX_CONTEXT_LENGTH}"
+  --generator_max_generation_length "${GENERATOR_MAX_GENERATION_LENGTH}"
   --generator_batch_size_per_gpu "${GENERATOR_BATCH_SIZE_PER_GPU}"
+  --retriever_query_context_length "${RETRIEVER_QUERY_CONTEXT_LENGTH}"
+  --retriever_candidate_context_length "${RETRIEVER_CANDIDATE_CONTEXT_LENGTH}"
   --retriever_batch_size_per_gpu "${RETRIEVER_BATCH_SIZE_PER_GPU}"
+  --sample_number "${SAMPLE_NUMBER}"
   --num_workers "${NUM_WORKERS}"
 )
 
@@ -357,6 +373,14 @@ if [[ "${UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT}" == "1" ]]; then
 fi
 
 case "${RUN_MODE}" in
+  rlcoder_full)
+    OUTPUT_DIR="$(make_output_dir "result_infer/RLCoder_${GENERATOR_ALIAS}_$(make_generator_window_name)")"
+    echo "Output dir: ${OUTPUT_DIR}"
+    conda run -p "${CONDA_ENV}" python main.py \
+      "${COMMON_ARGS[@]}" \
+      --output_dir "${OUTPUT_DIR}"
+    ;;
+
   baseline_debug)
     OUTPUT_DIR="$(make_output_dir "result_infer/RLCoder_baseline_debug")"
     echo "Output dir: ${OUTPUT_DIR}"
@@ -391,7 +415,7 @@ case "${RUN_MODE}" in
     ;;
 
   ucm_full)
-    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_deepseekcoder_7b_$(make_generator_window_name)" 1)"
+    OUTPUT_DIR="$(make_output_dir "result_infer/UCM_multipath_${GENERATOR_ALIAS}_$(make_generator_window_name)" 1)"
     echo "Output dir: ${OUTPUT_DIR}"
     conda run -p "${CONDA_ENV}" python main.py \
       "${COMMON_ARGS[@]}" \
@@ -401,7 +425,7 @@ case "${RUN_MODE}" in
 
   *)
     echo "Unknown RUN_MODE=${RUN_MODE}" >&2
-    echo "Use one of: baseline_debug, ucm_debug, ucm_repocoder_debug, ucm_full" >&2
+    echo "Use one of: rlcoder_full, baseline_debug, ucm_debug, ucm_repocoder_debug, ucm_full" >&2
     exit 2
     ;;
 esac
