@@ -182,7 +182,12 @@ def _finalize_ucm_trace(args, dataset_name, trace_rows, retrieved_codeblocks):
         return
 
     add_retrieval_trace_results(trace_rows, retrieved_codeblocks)
-    write_retrieval_trace(args.output_dir, dataset_name, trace_rows)
+    write_retrieval_trace(
+        args.output_dir,
+        dataset_name,
+        trace_rows,
+        overwrite=getattr(args, "ucm_trace_overwrite", False),
+    )
 
 
 def _apply_ucm_output_suffix(args):
@@ -227,6 +232,8 @@ def _write_run_config(args):
             graph_edges.append("api_call")
         if getattr(args, "ucm_graph_enable_typed_dependency_edges", False):
             graph_edges.append("typed_dependency")
+        if getattr(args, "ucm_graph_enable_unified_context_edges", False):
+            graph_edges.append("unified_context")
 
     query_views = ["base"]
     if not getattr(args, "ucm_disable_identifier_query", False):
@@ -277,6 +284,12 @@ def _write_run_config(args):
             "show_relations_in_prompt": getattr(
                 args, "ucm_graph_show_relations_in_prompt", False
             ),
+            "show_high_confidence_paths": getattr(
+                args, "ucm_graph_show_high_confidence_paths", False
+            ),
+            "prompt_min_confidence": getattr(
+                args, "ucm_graph_prompt_min_confidence", None
+            ),
             "relation_max_symbols": getattr(
                 args, "ucm_graph_relation_max_symbols", None
             ),
@@ -309,6 +322,43 @@ def _write_run_config(args):
                     args, "ucm_graph_typed_allow_target_file", False
                 ),
             },
+            "unified_context": {
+                "enabled": getattr(
+                    args, "ucm_graph_enable_unified_context_edges", False
+                ),
+                "multi_evidence": getattr(
+                    args, "ucm_graph_enable_multi_evidence", False
+                ),
+                "query_max": getattr(args, "ucm_graph_unified_query_max", None),
+                "query_context_lines": getattr(
+                    args, "ucm_graph_unified_query_context_lines", None
+                ),
+                "max_df": getattr(args, "ucm_graph_unified_max_df", None),
+                "max_evidence_per_candidate": getattr(
+                    args, "ucm_graph_max_evidence_per_candidate", None
+                ),
+                "receiver_weight": getattr(
+                    args, "ucm_graph_unified_receiver_weight", None
+                ),
+                "override_weight": getattr(
+                    args, "ucm_graph_unified_override_weight", None
+                ),
+                "member_weight": getattr(
+                    args, "ucm_graph_unified_member_weight", None
+                ),
+                "import_weight": getattr(
+                    args, "ucm_graph_unified_import_weight", None
+                ),
+                "inheritance_weight": getattr(
+                    args, "ucm_graph_unified_inheritance_weight", None
+                ),
+                "signature_weight": getattr(
+                    args, "ucm_graph_unified_signature_weight", None
+                ),
+                "control_weight": getattr(
+                    args, "ucm_graph_unified_control_weight", None
+                ),
+            },
             "rerank": {
                 "enabled": getattr(args, "ucm_graph_enable_rerank", False),
                 "alpha": getattr(args, "ucm_graph_rerank_alpha", None),
@@ -317,6 +367,27 @@ def _write_run_config(args):
                 "source_prior_import": getattr(args, "ucm_graph_source_prior_import", None),
                 "source_prior_api_call": getattr(args, "ucm_graph_source_prior_api_call", None),
                 "distance_penalty": getattr(args, "ucm_graph_distance_penalty", None),
+                "path_rerank": getattr(
+                    args, "ucm_graph_enable_path_rerank", False
+                ),
+                "path_score_scale": getattr(
+                    args, "ucm_graph_path_score_scale", None
+                ),
+                "multi_relation_bonus": getattr(
+                    args, "ucm_graph_path_multi_relation_bonus", None
+                ),
+                "query_origin_bonus": getattr(
+                    args, "ucm_graph_path_query_origin_bonus", None
+                ),
+                "evidence_gate": getattr(
+                    args, "ucm_graph_enable_evidence_gate", False
+                ),
+                "new_candidate_min_paths": getattr(
+                    args, "ucm_graph_new_candidate_min_paths", None
+                ),
+                "new_candidate_min_confidence": getattr(
+                    args, "ucm_graph_new_candidate_min_confidence", None
+                ),
             },
         },
         "args": vars(args),
@@ -363,11 +434,17 @@ def _ucm_output_suffix(args):
             relation_mode = getattr(args, "ucm_graph_typed_relation_mode", "all")
             if relation_mode != "all":
                 graph_parts.append(relation_mode)
+        if getattr(args, "ucm_graph_enable_unified_context_edges", False):
+            graph_parts.append("gunified")
+        if getattr(args, "ucm_graph_enable_multi_evidence", False):
+            graph_parts.append("multiev")
         max_selected = getattr(args, "ucm_graph_max_selected", 0)
         if max_selected:
             graph_parts.append(f"gcap{max_selected}")
         if getattr(args, "ucm_graph_show_relations_in_prompt", False):
             graph_parts.append("gvisible")
+        if getattr(args, "ucm_graph_show_high_confidence_paths", False):
+            graph_parts.append("pathvisible")
         if getattr(args, "ucm_graph_enable_rerank", False):
             graph_parts.append(
                 "rerank"
@@ -783,8 +860,8 @@ if __name__ == "__main__":
 
     parser.add_argument("--generator_model_path", default=local_model_path("deepseek-coder-6.7b-base"), type=str, help="Generator model path")
     parser.add_argument("--generator_batch_size_per_gpu", default=32, type=int, help="Generator batch size per GPU")
-    parser.add_argument("--generator_max_crossfile_length", default=512, type=int, help="Maximum cross-file length for the generator")
-    parser.add_argument("--generator_max_context_length", default=1024, type=int, help="Maximum context length for the generator")
+    parser.add_argument("--generator_max_crossfile_length", default=3072, type=int, help="Maximum cross-file length for the generator")
+    parser.add_argument("--generator_max_context_length", default=4096, type=int, help="Maximum context length for the generator")
     parser.add_argument("--generator_max_generation_length", default=64, type=int, help="Maximum generation length for the generator")
     parser.add_argument("--disable_generator", action="store_true", help="Disable the generator")
 
@@ -825,6 +902,7 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_query_import_limit", default=32, type=int, help="Maximum import/API lines or tokens in the UCM import query")
     parser.add_argument("--ucm_disable_enhanced_bm25", action="store_true", help="Use the original BM25 tokenization and code-only index for UCM")
     parser.add_argument("--ucm_trace_retrieval", action="store_true", help="Print UCM retrieval trace; jsonl trace files are always written for UCM retrieval")
+    parser.add_argument("--ucm_trace_overwrite", action="store_true", help="Overwrite each dataset trace instead of appending to an existing result directory")
     parser.add_argument("--enable_context_gate", action="store_true", help="Enable lightweight rule-based UCM context gate")
     parser.add_argument("--ucm_gate_max_auxiliary_blocks", default=2, type=int, help="Maximum auxiliary-only UCM candidates kept before reranking")
     parser.add_argument("--ucm_gate_allow_path_only", default=0, type=int, help="Maximum path-only UCM candidates kept before reranking")
@@ -838,6 +916,8 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_graph_enable_import_edges", action="store_true", help="Enable import/path graph edges")
     parser.add_argument("--ucm_graph_enable_api_call_edges", action="store_true", help="Enable API/call-name graph edges")
     parser.add_argument("--ucm_graph_enable_typed_dependency_edges", action="store_true", help="Enable DDG-lite typed dependency edges backed by code definitions")
+    parser.add_argument("--ucm_graph_enable_unified_context_edges", action="store_true", help="Enable the full visible-prefix and repository heterogeneous context graph")
+    parser.add_argument("--ucm_graph_enable_multi_evidence", action="store_true", help="Preserve and aggregate all graph paths supporting each candidate")
     parser.add_argument("--ucm_graph_typed_relation_mode", default="all", choices=["all", "type_only", "call_only", "def_use_only"], help="Typed dependency relations enabled during graph expansion")
     parser.add_argument("--ucm_graph_identifier_max_df", default=20, type=int, help="Maximum per-task document frequency for identifier graph edges")
     parser.add_argument("--ucm_graph_api_call_max_df", default=20, type=int, help="Maximum per-task document frequency for API/call graph edges")
@@ -860,11 +940,31 @@ if __name__ == "__main__":
     parser.add_argument("--ucm_graph_typed_type_weight", default=2.0, type=float, help="Base graph score for type-to-definition dependencies")
     parser.add_argument("--ucm_graph_typed_def_use_weight", default=1.4, type=float, help="Base graph score for use-to-definition dependencies")
     parser.add_argument("--ucm_graph_typed_allow_target_file", action="store_true", help="Allow typed dependency expansion into the target file; disabled by default to prevent leakage")
+    parser.add_argument("--ucm_graph_unified_query_max", default=16, type=int, help="Maximum direct query-anchor candidates from the unified graph")
+    parser.add_argument("--ucm_graph_unified_query_context_lines", default=160, type=int, help="Visible left-context lines used to build the local query graph")
+    parser.add_argument("--ucm_graph_unified_max_df", default=12, type=int, help="Maximum definition ambiguity accepted by unified semantic paths")
+    parser.add_argument("--ucm_graph_max_evidence_per_candidate", default=12, type=int, help="Maximum distinct graph evidence paths retained per candidate")
+    parser.add_argument("--ucm_graph_unified_receiver_weight", default=3.2, type=float, help="Weight for reaching-type to receiver-member paths")
+    parser.add_argument("--ucm_graph_unified_override_weight", default=2.9, type=float, help="Weight for inheritance-aware override paths")
+    parser.add_argument("--ucm_graph_unified_member_weight", default=2.6, type=float, help="Weight for member-of paths")
+    parser.add_argument("--ucm_graph_unified_import_weight", default=2.5, type=float, help="Weight for import and package resolution paths")
+    parser.add_argument("--ucm_graph_unified_inheritance_weight", default=2.3, type=float, help="Weight for extends and implements paths")
+    parser.add_argument("--ucm_graph_unified_signature_weight", default=1.7, type=float, help="Weight for parameter and expected-return type paths")
+    parser.add_argument("--ucm_graph_unified_control_weight", default=0.8, type=float, help="Weight for visible-prefix control-dependence evidence")
     parser.add_argument("--ucm_graph_max_selected", default=0, type=int, help="Maximum graph-only blocks allowed in final Top-K; 0 disables the cap")
     parser.add_argument("--ucm_graph_max_selected_tokens", default=0, type=int, help="Approximate retriever-token budget for graph-only blocks in final Top-K; 0 disables the cap")
     parser.add_argument("--ucm_graph_show_relations_in_prompt", action="store_true", help="Expose typed dependency relation headers to the generator only")
+    parser.add_argument("--ucm_graph_show_high_confidence_paths", action="store_true", help="Expose one high-confidence path for graph-only generator context")
+    parser.add_argument("--ucm_graph_prompt_min_confidence", default=3.0, type=float, help="Minimum path confidence exposed to the generator")
     parser.add_argument("--ucm_graph_relation_max_symbols", default=3, type=int, help="Maximum matched symbols shown in each dependency relation header")
     parser.add_argument("--ucm_graph_enable_rerank", action="store_true", help="Enable graph-aware score fusion after RLRetriever cosine scoring")
+    parser.add_argument("--ucm_graph_enable_path_rerank", action="store_true", help="Use absolute multi-path evidence instead of per-query min-max graph scores")
+    parser.add_argument("--ucm_graph_path_score_scale", default=4.0, type=float, help="Scale for bounded unified path-score reranking")
+    parser.add_argument("--ucm_graph_path_multi_relation_bonus", default=0.004, type=float, help="Rerank bonus per additional supporting relation")
+    parser.add_argument("--ucm_graph_path_query_origin_bonus", default=0.003, type=float, help="Rerank bonus for direct query-anchor evidence")
+    parser.add_argument("--ucm_graph_enable_evidence_gate", action="store_true", help="Require multiple or high-confidence paths for graph-only context")
+    parser.add_argument("--ucm_graph_new_candidate_min_paths", default=2, type=int, help="Minimum evidence paths for a graph-only candidate")
+    parser.add_argument("--ucm_graph_new_candidate_min_confidence", default=3.0, type=float, help="Single-path confidence that bypasses the graph-only path-count gate")
     parser.add_argument("--ucm_graph_rerank_alpha", default=0.03, type=float, help="Weight for normalized graph score in graph-aware reranking")
     parser.add_argument("--ucm_graph_source_prior_same_file", default=0.02, type=float, help="Rerank prior for same-file graph candidates")
     parser.add_argument("--ucm_graph_source_prior_identifier", default=0.015, type=float, help="Rerank prior for identifier graph candidates")

@@ -53,6 +53,26 @@ class CustomDataset(Dataset):
 
     def _render_codeblock(self, block):
         block_text = str(block)
+        if getattr(self.args, "ucm_graph_show_high_confidence_paths", False):
+            evidence = tuple(getattr(block, "_ucm_graph_evidence", ()))
+            sources = tuple(getattr(block, "_ucm_sources", ()))
+            graph_only = bool(sources) and all(
+                source.startswith("graph_") for source in sources
+            )
+            min_confidence = getattr(
+                self.args, "ucm_graph_prompt_min_confidence", 3.0
+            )
+            eligible = [
+                item
+                for item in evidence
+                if float(item.get("confidence", 0.0)) >= min_confidence
+            ]
+            if graph_only and eligible:
+                dominant = eligible[0]
+                path = " -> ".join(dominant.get("path", ()))
+                comment_label = "#" if block.language == "python" else "//"
+                return f"{comment_label} context path: {path}\n{block_text}"
+
         if not getattr(self.args, "ucm_graph_show_relations_in_prompt", False):
             return block_text
 
@@ -82,7 +102,7 @@ class CustomDataset(Dataset):
         example = self.examples[idx]
         retrieved_codeblocks = self.retrieved_codeblocks[idx]
         prompt = self.construct_prompts(example,retrieved_codeblocks)
-        
+
         prompt_ids = self.tokenizer.encode(prompt)[-self.args.generator_max_context_length:]
         if self.generation:
              padding_length = self.args.generator_max_context_length - len(prompt_ids)
@@ -96,7 +116,7 @@ class CustomDataset(Dataset):
 
         padding_length = self.args.generator_max_context_length + self.args.generator_max_generation_length - len(input_ids)
         input_ids = [self.tokenizer.pad_token_id] * padding_length + input_ids
-        labels = [-100] * padding_length + labels 
+        labels = [-100] * padding_length + labels
 
         return torch.tensor(input_ids), torch.tensor(labels)
 
@@ -123,31 +143,31 @@ class Model(nn.Module):
             logits = self.base_model(inputs, attention_mask=inputs.ne(self.tokenizer.pad_token_id))[0]
             logits = logits[:, :-1]
             labels = labels[:, 1:]
-            
+
             label_tokens = [self.tokenizer.convert_ids_to_tokens(id.item()) if id != -100 else '<pad>' for id in labels.reshape(-1)]
 
             loss = torch.nn.functional.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1), ignore_index=-100, reduction='none')
 
             if weighted_keywords:
                 id_weight = 3
-                first_token_weight = 5 
+                first_token_weight = 5
 
                 weights = torch.tensor([
                     first_token_weight if i < 1 else id_weight if is_identifier(token, lang) and any(c.isalpha() or c.isdigit() or c == '_' for c in token) else 1
                     for i, token in enumerate(label_tokens)
                 ], dtype=torch.float).cuda()
 
-                loss = loss * weights  
+                loss = loss * weights
 
             loss_per_label = loss.reshape(labels.size(0), -1).sum(dim=1) / labels.ne(-100).sum(dim=1)
-            
+
             return loss_per_label
         else:
             generated_ids = self.base_model.generate(inputs, attention_mask=inputs.ne(self.tokenizer.pad_token_id), max_length=inputs.size(1)+self.max_generation_length, pad_token_id=self.tokenizer.pad_token_id)
             return generated_ids[:, inputs.size(1):]
-       
 
-    
+
+
 class Generator:
     """
     Code generator class.
@@ -195,7 +215,7 @@ class Generator:
                 pbar.set_description(f"Loss/PPL: {np.mean(losses):.3f}/{current_ppl:.3f}")
 
         return losses
-    
+
     def generate(self, examples, retrieved_codeblocks, max_generation_length):
         """
         Generates code.

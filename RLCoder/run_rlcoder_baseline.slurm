@@ -13,7 +13,7 @@ set -e
 
 cd /share/home/202421045349/projects/RLCoder/RLCoder
 
-mkdir -p log_infer result_infer/RLCoder_deepseekcoder_7b_crossfile_1536_infile_512
+mkdir -p log_infer result_infer/RLCoder_deepseekcoder_7b_crossfile_3072_infile_1024
 
 export TOKENIZERS_PARALLELISM=false
 
@@ -29,11 +29,11 @@ conda run -p /share/home/202421045349/conda_envs/rlcoder python main.py \
   --inference_type unixcoder_with_rl \
   --retriever_model_path ./models/RLRetriever \
   --generator_model_path ./models/deepseek-coder-6.7b-base \
-  --generator_max_crossfile_length 1536 \
-  --generator_max_context_length 2048 \
+  --generator_max_crossfile_length 3072 \
+  --generator_max_context_length 4096 \
   --generator_batch_size_per_gpu 8 \
   --retriever_batch_size_per_gpu 32 \
   --num_workers 6 \
-  --output_dir result_infer/RLCoder_deepseekcoder_7b_crossfile_1536_infile_512
+  --output_dir result_infer/RLCoder_deepseekcoder_7b_crossfile_3072_infile_1024
 
 echo "End time: $(date)"

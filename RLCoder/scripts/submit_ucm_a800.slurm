@@ -58,6 +58,8 @@ UCM_GRAPH_ENABLE_IMPORT_EDGES="${UCM_GRAPH_ENABLE_IMPORT_EDGES:-0}"
 UCM_GRAPH_ENABLE_API_CALL_EDGES="${UCM_GRAPH_ENABLE_API_CALL_EDGES:-0}"
 UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES="${UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES:-0}"
 UCM_GRAPH_TYPED_RELATION_MODE="${UCM_GRAPH_TYPED_RELATION_MODE:-all}"
+UCM_GRAPH_ENABLE_UNIFIED_CONTEXT_EDGES="${UCM_GRAPH_ENABLE_UNIFIED_CONTEXT_EDGES:-0}"
+UCM_GRAPH_ENABLE_MULTI_EVIDENCE="${UCM_GRAPH_ENABLE_MULTI_EVIDENCE:-0}"
 UCM_GRAPH_IDENTIFIER_MAX_DF="${UCM_GRAPH_IDENTIFIER_MAX_DF:-20}"
 UCM_GRAPH_API_CALL_MAX_DF="${UCM_GRAPH_API_CALL_MAX_DF:-20}"
 UCM_GRAPH_SAME_FILE_DIRECTION="${UCM_GRAPH_SAME_FILE_DIRECTION:-both}"
@@ -79,11 +81,32 @@ UCM_GRAPH_TYPED_CALL_WEIGHT="${UCM_GRAPH_TYPED_CALL_WEIGHT:-1.8}"
 UCM_GRAPH_TYPED_TYPE_WEIGHT="${UCM_GRAPH_TYPED_TYPE_WEIGHT:-2.0}"
 UCM_GRAPH_TYPED_DEF_USE_WEIGHT="${UCM_GRAPH_TYPED_DEF_USE_WEIGHT:-1.4}"
 UCM_GRAPH_TYPED_ALLOW_TARGET_FILE="${UCM_GRAPH_TYPED_ALLOW_TARGET_FILE:-0}"
+UCM_GRAPH_UNIFIED_QUERY_MAX="${UCM_GRAPH_UNIFIED_QUERY_MAX:-16}"
+UCM_GRAPH_UNIFIED_QUERY_CONTEXT_LINES="${UCM_GRAPH_UNIFIED_QUERY_CONTEXT_LINES:-160}"
+UCM_GRAPH_UNIFIED_MAX_DF="${UCM_GRAPH_UNIFIED_MAX_DF:-12}"
+UCM_GRAPH_MAX_EVIDENCE_PER_CANDIDATE="${UCM_GRAPH_MAX_EVIDENCE_PER_CANDIDATE:-12}"
+UCM_GRAPH_UNIFIED_RECEIVER_WEIGHT="${UCM_GRAPH_UNIFIED_RECEIVER_WEIGHT:-3.2}"
+UCM_GRAPH_UNIFIED_OVERRIDE_WEIGHT="${UCM_GRAPH_UNIFIED_OVERRIDE_WEIGHT:-2.9}"
+UCM_GRAPH_UNIFIED_MEMBER_WEIGHT="${UCM_GRAPH_UNIFIED_MEMBER_WEIGHT:-2.6}"
+UCM_GRAPH_UNIFIED_IMPORT_WEIGHT="${UCM_GRAPH_UNIFIED_IMPORT_WEIGHT:-2.5}"
+UCM_GRAPH_UNIFIED_INHERITANCE_WEIGHT="${UCM_GRAPH_UNIFIED_INHERITANCE_WEIGHT:-2.3}"
+UCM_GRAPH_UNIFIED_SIGNATURE_WEIGHT="${UCM_GRAPH_UNIFIED_SIGNATURE_WEIGHT:-1.7}"
+UCM_GRAPH_UNIFIED_CONTROL_WEIGHT="${UCM_GRAPH_UNIFIED_CONTROL_WEIGHT:-0.8}"
 UCM_GRAPH_MAX_SELECTED="${UCM_GRAPH_MAX_SELECTED:-0}"
 UCM_GRAPH_MAX_SELECTED_TOKENS="${UCM_GRAPH_MAX_SELECTED_TOKENS:-0}"
 UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT="${UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT:-0}"
+UCM_GRAPH_SHOW_HIGH_CONFIDENCE_PATHS="${UCM_GRAPH_SHOW_HIGH_CONFIDENCE_PATHS:-0}"
+UCM_GRAPH_PROMPT_MIN_CONFIDENCE="${UCM_GRAPH_PROMPT_MIN_CONFIDENCE:-3.0}"
 UCM_GRAPH_RELATION_MAX_SYMBOLS="${UCM_GRAPH_RELATION_MAX_SYMBOLS:-3}"
 UCM_GRAPH_ENABLE_RERANK="${UCM_GRAPH_ENABLE_RERANK:-0}"
+UCM_GRAPH_ENABLE_PATH_RERANK="${UCM_GRAPH_ENABLE_PATH_RERANK:-0}"
+UCM_GRAPH_PATH_SCORE_SCALE="${UCM_GRAPH_PATH_SCORE_SCALE:-4.0}"
+UCM_GRAPH_PATH_MULTI_RELATION_BONUS="${UCM_GRAPH_PATH_MULTI_RELATION_BONUS:-0.004}"
+UCM_GRAPH_PATH_QUERY_ORIGIN_BONUS="${UCM_GRAPH_PATH_QUERY_ORIGIN_BONUS:-0.003}"
+UCM_GRAPH_ENABLE_EVIDENCE_GATE="${UCM_GRAPH_ENABLE_EVIDENCE_GATE:-0}"
+UCM_GRAPH_NEW_CANDIDATE_MIN_PATHS="${UCM_GRAPH_NEW_CANDIDATE_MIN_PATHS:-2}"
+UCM_GRAPH_NEW_CANDIDATE_MIN_CONFIDENCE="${UCM_GRAPH_NEW_CANDIDATE_MIN_CONFIDENCE:-3.0}"
+UCM_TRACE_OVERWRITE="${UCM_TRACE_OVERWRITE:-0}"
 UCM_GRAPH_RERANK_ALPHA="${UCM_GRAPH_RERANK_ALPHA:-0.03}"
 UCM_GRAPH_SOURCE_PRIOR_SAME_FILE="${UCM_GRAPH_SOURCE_PRIOR_SAME_FILE:-0.02}"
 UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER="${UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER:-0.015}"
@@ -93,6 +116,23 @@ UCM_GRAPH_DISTANCE_PENALTY="${UCM_GRAPH_DISTANCE_PENALTY:-0.005}"
 
 cd "${PROJECT_DIR}"
 mkdir -p log_infer result_infer
+
+if ! command -v conda >/dev/null 2>&1; then
+  if [[ -f /etc/profile.d/modules.sh ]]; then
+    # Slurm batch shells on this cluster do not always preload environment modules.
+    source /etc/profile.d/modules.sh
+  fi
+  if command -v module >/dev/null 2>&1; then
+    module load anaconda/3-2024.02.01 || true
+  fi
+  if [[ -f /share/software/anaconda3/2024.02.01/etc/profile.d/conda.sh ]]; then
+    source /share/software/anaconda3/2024.02.01/etc/profile.d/conda.sh
+  fi
+fi
+if ! command -v conda >/dev/null 2>&1; then
+  echo "conda command not found; load Anaconda or set CONDA_ENV to a runnable environment." >&2
+  exit 127
+fi
 
 if [[ -n "${UCM_RUN_TAG}" && "${UCM_RUN_TAG}" =~ [^A-Za-z0-9._-] ]]; then
   echo "Invalid UCM_RUN_TAG=${UCM_RUN_TAG}; use only letters, numbers, dot, underscore, or hyphen." >&2
@@ -189,8 +229,17 @@ make_ucm_suffix() {
         graph_part="${graph_part}_${UCM_GRAPH_TYPED_RELATION_MODE}"
       fi
     fi
+    if [[ "${UCM_GRAPH_ENABLE_UNIFIED_CONTEXT_EDGES}" == "1" ]]; then
+      graph_part="${graph_part}_gunified"
+    fi
+    if [[ "${UCM_GRAPH_ENABLE_MULTI_EVIDENCE}" == "1" ]]; then
+      graph_part="${graph_part}_multiev"
+    fi
     if [[ "${UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT}" == "1" ]]; then
       graph_part="${graph_part}_gvisible"
+    fi
+    if [[ "${UCM_GRAPH_SHOW_HIGH_CONFIDENCE_PATHS}" == "1" ]]; then
+      graph_part="${graph_part}_pathvisible"
     fi
     if [[ "${UCM_GRAPH_ENABLE_RERANK}" == "1" ]]; then
       graph_part="${graph_part}_rerank_a${UCM_GRAPH_RERANK_ALPHA}_d${UCM_GRAPH_DISTANCE_PENALTY}"
@@ -221,10 +270,12 @@ echo "Generator model path: ${GENERATOR_MODEL}"
 echo "UCM source switches: disable_identifier=${UCM_DISABLE_IDENTIFIER_QUERY}, disable_import_api=${UCM_DISABLE_IMPORT_API_QUERY}, enable_path=${UCM_ENABLE_PATH_QUERY}"
 echo "UCM enhanced BM25: disabled=${UCM_DISABLE_ENHANCED_BM25}"
 echo "UCM context gate: enable=${UCM_ENABLE_CONTEXT_GATE}, max_aux=${UCM_GATE_MAX_AUXILIARY_BLOCKS}, allow_path_only=${UCM_GATE_ALLOW_PATH_ONLY}, stop_threshold=${UCM_GATE_STOP_RANK_THRESHOLD}"
-echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, same_file_edges=${UCM_GRAPH_ENABLE_SAME_FILE_EDGES}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}, api_call_edges=${UCM_GRAPH_ENABLE_API_CALL_EDGES}, typed_dependency_edges=${UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES}, same_file_direction=${UCM_GRAPH_SAME_FILE_DIRECTION}, identifier_query_only=${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}, api_call_query_only=${UCM_GRAPH_API_CALL_QUERY_ONLY}"
+echo "UCM context graph: enable=${UCM_ENABLE_CONTEXT_GRAPH}, max_seed=${UCM_GRAPH_MAX_SEED}, neighbors=${UCM_GRAPH_MAX_NEIGHBORS_PER_SEED}, expanded=${UCM_GRAPH_MAX_EXPANDED}, same_file_edges=${UCM_GRAPH_ENABLE_SAME_FILE_EDGES}, identifier_edges=${UCM_GRAPH_ENABLE_IDENTIFIER_EDGES}, import_edges=${UCM_GRAPH_ENABLE_IMPORT_EDGES}, api_call_edges=${UCM_GRAPH_ENABLE_API_CALL_EDGES}, typed_dependency_edges=${UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES}, unified_context_edges=${UCM_GRAPH_ENABLE_UNIFIED_CONTEXT_EDGES}, multi_evidence=${UCM_GRAPH_ENABLE_MULTI_EVIDENCE}, same_file_direction=${UCM_GRAPH_SAME_FILE_DIRECTION}, identifier_query_only=${UCM_GRAPH_IDENTIFIER_QUERY_ONLY}, api_call_query_only=${UCM_GRAPH_API_CALL_QUERY_ONLY}"
 echo "UCM graph scoring: seed_decay=${UCM_GRAPH_SEED_RANK_DECAY}, distance_decay=${UCM_GRAPH_DISTANCE_DECAY}, same_file_w=${UCM_GRAPH_SAME_FILE_WEIGHT}, identifier_w=${UCM_GRAPH_IDENTIFIER_WEIGHT}, import_w=${UCM_GRAPH_IMPORT_WEIGHT}, api_call_w=${UCM_GRAPH_API_CALL_WEIGHT}, query_bonus=${UCM_GRAPH_QUERY_OVERLAP_BONUS}, query_api_bonus=${UCM_GRAPH_QUERY_API_BONUS}"
 echo "UCM typed dependency: relation_mode=${UCM_GRAPH_TYPED_RELATION_MODE}, query_max=${UCM_GRAPH_TYPED_QUERY_MAX}, query_lines=${UCM_GRAPH_TYPED_QUERY_CONTEXT_LINES}, max_df=${UCM_GRAPH_TYPED_MAX_DF}, query_bonus=${UCM_GRAPH_TYPED_QUERY_BONUS}, call_w=${UCM_GRAPH_TYPED_CALL_WEIGHT}, type_w=${UCM_GRAPH_TYPED_TYPE_WEIGHT}, def_use_w=${UCM_GRAPH_TYPED_DEF_USE_WEIGHT}, allow_target_file=${UCM_GRAPH_TYPED_ALLOW_TARGET_FILE}, max_selected=${UCM_GRAPH_MAX_SELECTED}, max_selected_tokens=${UCM_GRAPH_MAX_SELECTED_TOKENS}, prompt_relations=${UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT}"
+echo "UCM unified graph: query_max=${UCM_GRAPH_UNIFIED_QUERY_MAX}, query_lines=${UCM_GRAPH_UNIFIED_QUERY_CONTEXT_LINES}, max_df=${UCM_GRAPH_UNIFIED_MAX_DF}, max_evidence=${UCM_GRAPH_MAX_EVIDENCE_PER_CANDIDATE}, receiver_w=${UCM_GRAPH_UNIFIED_RECEIVER_WEIGHT}, override_w=${UCM_GRAPH_UNIFIED_OVERRIDE_WEIGHT}, member_w=${UCM_GRAPH_UNIFIED_MEMBER_WEIGHT}, import_w=${UCM_GRAPH_UNIFIED_IMPORT_WEIGHT}, inheritance_w=${UCM_GRAPH_UNIFIED_INHERITANCE_WEIGHT}, signature_w=${UCM_GRAPH_UNIFIED_SIGNATURE_WEIGHT}, control_w=${UCM_GRAPH_UNIFIED_CONTROL_WEIGHT}"
 echo "UCM graph rerank: enable=${UCM_GRAPH_ENABLE_RERANK}, alpha=${UCM_GRAPH_RERANK_ALPHA}, same_file_prior=${UCM_GRAPH_SOURCE_PRIOR_SAME_FILE}, identifier_prior=${UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER}, import_prior=${UCM_GRAPH_SOURCE_PRIOR_IMPORT}, api_call_prior=${UCM_GRAPH_SOURCE_PRIOR_API_CALL}, distance_penalty=${UCM_GRAPH_DISTANCE_PENALTY}"
+echo "UCM path fusion: enable=${UCM_GRAPH_ENABLE_PATH_RERANK}, scale=${UCM_GRAPH_PATH_SCORE_SCALE}, relation_bonus=${UCM_GRAPH_PATH_MULTI_RELATION_BONUS}, query_bonus=${UCM_GRAPH_PATH_QUERY_ORIGIN_BONUS}, evidence_gate=${UCM_GRAPH_ENABLE_EVIDENCE_GATE}, min_paths=${UCM_GRAPH_NEW_CANDIDATE_MIN_PATHS}, min_confidence=${UCM_GRAPH_NEW_CANDIDATE_MIN_CONFIDENCE}, prompt_paths=${UCM_GRAPH_SHOW_HIGH_CONFIDENCE_PATHS}, trace_overwrite=${UCM_TRACE_OVERWRITE}"
 echo "Generator prompt window: context=${GENERATOR_MAX_CONTEXT_LENGTH}, crossfile=${GENERATOR_MAX_CROSSFILE_LENGTH}, infile=$((GENERATOR_MAX_CONTEXT_LENGTH - GENERATOR_MAX_CROSSFILE_LENGTH))"
 echo "Generation/retrieval budget: generation=${GENERATOR_MAX_GENERATION_LENGTH}, retriever_query=${RETRIEVER_QUERY_CONTEXT_LENGTH}, retriever_candidate=${RETRIEVER_CANDIDATE_CONTEXT_LENGTH}, sample/topk=${SAMPLE_NUMBER}"
 echo "Evaluation datasets: ${EVAL_DATASETS_ARG:-all}"
@@ -320,10 +371,27 @@ if [[ "${UCM_ENABLE_CONTEXT_GRAPH}" == "1" ]]; then
     --ucm_graph_typed_call_weight "${UCM_GRAPH_TYPED_CALL_WEIGHT}"
     --ucm_graph_typed_type_weight "${UCM_GRAPH_TYPED_TYPE_WEIGHT}"
     --ucm_graph_typed_def_use_weight "${UCM_GRAPH_TYPED_DEF_USE_WEIGHT}"
+    --ucm_graph_unified_query_max "${UCM_GRAPH_UNIFIED_QUERY_MAX}"
+    --ucm_graph_unified_query_context_lines "${UCM_GRAPH_UNIFIED_QUERY_CONTEXT_LINES}"
+    --ucm_graph_unified_max_df "${UCM_GRAPH_UNIFIED_MAX_DF}"
+    --ucm_graph_max_evidence_per_candidate "${UCM_GRAPH_MAX_EVIDENCE_PER_CANDIDATE}"
+    --ucm_graph_unified_receiver_weight "${UCM_GRAPH_UNIFIED_RECEIVER_WEIGHT}"
+    --ucm_graph_unified_override_weight "${UCM_GRAPH_UNIFIED_OVERRIDE_WEIGHT}"
+    --ucm_graph_unified_member_weight "${UCM_GRAPH_UNIFIED_MEMBER_WEIGHT}"
+    --ucm_graph_unified_import_weight "${UCM_GRAPH_UNIFIED_IMPORT_WEIGHT}"
+    --ucm_graph_unified_inheritance_weight "${UCM_GRAPH_UNIFIED_INHERITANCE_WEIGHT}"
+    --ucm_graph_unified_signature_weight "${UCM_GRAPH_UNIFIED_SIGNATURE_WEIGHT}"
+    --ucm_graph_unified_control_weight "${UCM_GRAPH_UNIFIED_CONTROL_WEIGHT}"
     --ucm_graph_max_selected "${UCM_GRAPH_MAX_SELECTED}"
     --ucm_graph_max_selected_tokens "${UCM_GRAPH_MAX_SELECTED_TOKENS}"
     --ucm_graph_relation_max_symbols "${UCM_GRAPH_RELATION_MAX_SYMBOLS}"
+    --ucm_graph_prompt_min_confidence "${UCM_GRAPH_PROMPT_MIN_CONFIDENCE}"
     --ucm_graph_rerank_alpha "${UCM_GRAPH_RERANK_ALPHA}"
+    --ucm_graph_path_score_scale "${UCM_GRAPH_PATH_SCORE_SCALE}"
+    --ucm_graph_path_multi_relation_bonus "${UCM_GRAPH_PATH_MULTI_RELATION_BONUS}"
+    --ucm_graph_path_query_origin_bonus "${UCM_GRAPH_PATH_QUERY_ORIGIN_BONUS}"
+    --ucm_graph_new_candidate_min_paths "${UCM_GRAPH_NEW_CANDIDATE_MIN_PATHS}"
+    --ucm_graph_new_candidate_min_confidence "${UCM_GRAPH_NEW_CANDIDATE_MIN_CONFIDENCE}"
     --ucm_graph_source_prior_same_file "${UCM_GRAPH_SOURCE_PRIOR_SAME_FILE}"
     --ucm_graph_source_prior_identifier "${UCM_GRAPH_SOURCE_PRIOR_IDENTIFIER}"
     --ucm_graph_source_prior_import "${UCM_GRAPH_SOURCE_PRIOR_IMPORT}"
@@ -364,12 +432,36 @@ if [[ "${UCM_GRAPH_ENABLE_TYPED_DEPENDENCY_EDGES}" == "1" ]]; then
   UCM_ARGS+=(--ucm_graph_enable_typed_dependency_edges)
 fi
 
+if [[ "${UCM_GRAPH_ENABLE_UNIFIED_CONTEXT_EDGES}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_enable_unified_context_edges)
+fi
+
+if [[ "${UCM_GRAPH_ENABLE_MULTI_EVIDENCE}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_enable_multi_evidence)
+fi
+
 if [[ "${UCM_GRAPH_TYPED_ALLOW_TARGET_FILE}" == "1" ]]; then
   UCM_ARGS+=(--ucm_graph_typed_allow_target_file)
 fi
 
 if [[ "${UCM_GRAPH_SHOW_RELATIONS_IN_PROMPT}" == "1" ]]; then
   UCM_ARGS+=(--ucm_graph_show_relations_in_prompt)
+fi
+
+if [[ "${UCM_GRAPH_SHOW_HIGH_CONFIDENCE_PATHS}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_show_high_confidence_paths)
+fi
+
+if [[ "${UCM_GRAPH_ENABLE_PATH_RERANK}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_enable_path_rerank)
+fi
+
+if [[ "${UCM_GRAPH_ENABLE_EVIDENCE_GATE}" == "1" ]]; then
+  UCM_ARGS+=(--ucm_graph_enable_evidence_gate)
+fi
+
+if [[ "${UCM_TRACE_OVERWRITE}" == "1" ]]; then
+  COMMON_ARGS+=(--ucm_trace_overwrite)
 fi
 
 case "${RUN_MODE}" in

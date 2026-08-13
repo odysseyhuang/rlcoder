@@ -94,17 +94,19 @@ def add_retrieval_trace_results(trace_rows, retrieved_codeblocks):
         trace["stop_rank"] = _find_stop_rank(candidates)
         trace.update(_retrieved_graph_rerank_stats(candidates))
         trace.update(_retrieved_typed_dependency_stats(candidates))
+        trace.update(_retrieved_unified_graph_stats(candidates))
     return trace_rows
 
 
-def write_retrieval_trace(output_dir, dataset_name, trace_rows):
+def write_retrieval_trace(output_dir, dataset_name, trace_rows, overwrite=False):
     if not output_dir or not dataset_name or not trace_rows:
         return
 
     dataset_dir = os.path.join(output_dir, dataset_name)
     os.makedirs(dataset_dir, exist_ok=True)
     trace_path = os.path.join(dataset_dir, "ucm_retrieval_trace.jsonl")
-    with open(trace_path, "a", encoding="utf-8") as f_trace:
+    mode = "w" if overwrite else "a"
+    with open(trace_path, mode, encoding="utf-8") as f_trace:
         for trace in trace_rows:
             f_trace.write(json.dumps(trace, ensure_ascii=False) + "\n")
 
@@ -219,18 +221,26 @@ def _retrieved_graph_rerank_stats(candidates):
     biases = []
     retriever_scores = []
     final_scores = []
+    path_scores = []
+    path_biases = []
     for candidate in candidates:
         if _is_stop_block(candidate):
             break
         bias = getattr(candidate, "_ucm_graph_rerank_bias", None)
         retriever_score = getattr(candidate, "_ucm_retriever_score", None)
         final_score = getattr(candidate, "_ucm_final_score", None)
+        path_score = getattr(candidate, "_ucm_graph_path_score", None)
+        path_bias = getattr(candidate, "_ucm_graph_path_bias", None)
         if bias is not None:
             biases.append(float(bias))
         if retriever_score is not None:
             retriever_scores.append(float(retriever_score))
         if final_score is not None:
             final_scores.append(float(final_score))
+        if path_score is not None:
+            path_scores.append(float(path_score))
+        if path_bias is not None:
+            path_biases.append(float(path_bias))
 
     if not biases:
         return {}
@@ -246,6 +256,15 @@ def _retrieved_graph_rerank_stats(candidates):
         stats["retriever_score_avg"] = round(sum(retriever_scores) / len(retriever_scores), 6)
     if final_scores:
         stats["final_score_avg"] = round(sum(final_scores) / len(final_scores), 6)
+    if path_scores:
+        stats["graph_path_score_avg"] = round(
+            sum(path_scores) / len(path_scores), 6
+        )
+        stats["graph_path_score_max"] = round(max(path_scores), 6)
+    if path_biases:
+        stats["graph_path_bias_avg"] = round(
+            sum(path_biases) / len(path_biases), 6
+        )
     return stats
 
 
@@ -281,6 +300,57 @@ def _retrieved_typed_dependency_stats(candidates):
         "typed_dependency_retrieved_origins": dict(origin_counts),
         "typed_dependency_retrieved_symbols": dict(matched_symbols),
     }
+
+
+def _retrieved_unified_graph_stats(candidates):
+    relation_counts = Counter()
+    origin_counts = Counter()
+    confidences = []
+    path_lengths = []
+    evidence_candidates = 0
+    multi_evidence_candidates = 0
+    graph_only_count = 0
+
+    for candidate in candidates:
+        if _is_stop_block(candidate):
+            break
+        evidence = tuple(getattr(candidate, "_ucm_graph_evidence", ()))
+        if not evidence:
+            continue
+        evidence_candidates += 1
+        if len(evidence) > 1:
+            multi_evidence_candidates += 1
+        for item in evidence:
+            relation_counts[item.get("relation", "unknown")] += 1
+            origin_counts[item.get("origin", "unknown")] += 1
+            confidences.append(float(item.get("confidence", 0.0)))
+            path_lengths.append(int(item.get("path_length", 0)))
+        sources = tuple(getattr(candidate, "_ucm_sources", ()))
+        if sources and all(source.startswith("graph_") for source in sources):
+            graph_only_count += 1
+
+    if not evidence_candidates:
+        return {}
+    stats = {
+        "unified_graph_retrieved_candidates": evidence_candidates,
+        "unified_graph_retrieved_multi_evidence_candidates": multi_evidence_candidates,
+        "unified_graph_retrieved_graph_only_candidates": graph_only_count,
+        "unified_graph_retrieved_path_count": sum(relation_counts.values()),
+        "unified_graph_retrieved_relations": dict(relation_counts),
+        "unified_graph_retrieved_origins": dict(origin_counts),
+    }
+    if confidences:
+        stats["unified_graph_retrieved_confidence_avg"] = round(
+            sum(confidences) / len(confidences), 6
+        )
+        stats["unified_graph_retrieved_confidence_max"] = round(
+            max(confidences), 6
+        )
+    if path_lengths:
+        stats["unified_graph_retrieved_path_length_avg"] = round(
+            sum(path_lengths) / len(path_lengths), 6
+        )
+    return stats
 
 
 def _is_stop_block(candidate):

@@ -1,10 +1,12 @@
 import torch.nn as nn
-import torch    
+import torch
+import math
 from transformers import AutoTokenizer, AutoModel
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from datasets import CodeBlock
 from utils.model_utils import resolve_model_path
+from unified_context_graph import evidence_gate_passes
 
 
 GRAPH_SOURCE_NAMES = {
@@ -15,6 +17,7 @@ GRAPH_SOURCE_NAMES = {
     "graph_typed_call",
     "graph_typed_type",
     "graph_typed_def_use",
+    "graph_unified",
 }
 
 
@@ -63,7 +66,7 @@ class CustomDataset(Dataset):
 
     def __len__(self):
         return len(self.examples)
-    
+
     def __getitem__(self, idx):
         text = str(self.examples[idx])
         extracted_import = str(self.extracted_imports[idx]) if self.extracted_imports else ''
@@ -164,10 +167,43 @@ def _apply_graph_rerank_scores(args, query_scores, query_candidates):
     if not getattr(args, "ucm_graph_enable_rerank", False):
         return query_scores, query_scores * 0.0
 
-    graph_norm_scores = _normalized_graph_scores(query_candidates)
     graph_biases = query_scores * 0.0
     alpha = getattr(args, "ucm_graph_rerank_alpha", 0.03)
     distance_penalty = getattr(args, "ucm_graph_distance_penalty", 0.005)
+
+    if getattr(args, "ucm_graph_enable_path_rerank", False):
+        score_scale = max(
+            1e-6, getattr(args, "ucm_graph_path_score_scale", 4.0)
+        )
+        multi_bonus = max(
+            0.0, getattr(args, "ucm_graph_path_multi_relation_bonus", 0.004)
+        )
+        query_bonus = max(
+            0.0, getattr(args, "ucm_graph_path_query_origin_bonus", 0.003)
+        )
+        for idx, candidate in enumerate(query_candidates):
+            evidence = tuple(getattr(candidate, "_ucm_graph_evidence", ()))
+            graph_score = float(getattr(candidate, "_ucm_graph_score", 0.0) or 0.0)
+            relations = {
+                item.get("relation") for item in evidence if item.get("relation")
+            }
+            origins = {item.get("origin") for item in evidence if item.get("origin")}
+            graph_bias = alpha * math.tanh(graph_score / score_scale)
+            graph_bias += multi_bonus * min(3, max(0, len(relations) - 1))
+            if "query" in origins:
+                graph_bias += query_bonus
+            graph_bias += _graph_source_prior(args, candidate)
+            edge_distance = getattr(candidate, "_ucm_graph_edge_distance", None)
+            if edge_distance is not None:
+                graph_bias -= distance_penalty * max(0.0, float(edge_distance))
+            candidate._ucm_graph_path_score = graph_score
+            candidate._ucm_graph_evidence_count = len(evidence)
+            candidate._ucm_graph_relation_diversity = len(relations)
+            candidate._ucm_graph_path_bias = graph_bias
+            graph_biases[idx] = graph_bias
+        return query_scores + graph_biases, graph_biases
+
+    graph_norm_scores = _normalized_graph_scores(query_candidates)
 
     for idx, candidate in enumerate(query_candidates):
         graph_bias = alpha * graph_norm_scores[idx]
@@ -237,6 +273,25 @@ def _select_topk_indices(args, final_scores, candidates, topk, tokenizer=None):
     for idx in ranked_indices:
         candidate = candidates[idx]
         if _is_graph_only_candidate(candidate):
+            if getattr(args, "ucm_graph_enable_evidence_gate", False):
+                evidence = tuple(getattr(candidate, "_ucm_graph_evidence", ()))
+                min_paths = max(
+                    1, getattr(args, "ucm_graph_new_candidate_min_paths", 2)
+                )
+                min_confidence = max(
+                    0.0,
+                    getattr(
+                        args,
+                        "ucm_graph_new_candidate_min_confidence",
+                        3.0,
+                    ),
+                )
+                if not evidence_gate_passes(
+                    evidence,
+                    min_paths=min_paths,
+                    min_confidence=min_confidence,
+                ):
+                    continue
             if max_graph_blocks and selected_graph_blocks >= max_graph_blocks:
                 continue
             candidate_tokens = 0

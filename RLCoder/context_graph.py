@@ -4,6 +4,11 @@ import re
 from collections import Counter, defaultdict
 
 from typed_dependency_graph import TypedDependencyIndex
+from unified_context_graph import (
+    UnifiedContextGraphIndex,
+    aggregate_evidence_score,
+    merge_evidence,
+)
 
 
 IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
@@ -52,6 +57,7 @@ class ContextGraphIndex:
         self.identifier_df_by_task = {}
         self.api_call_df_by_task = {}
         self.typed_dependency_index = TypedDependencyIndex(code_blocks_by_task)
+        self.unified_context_index = UnifiedContextGraphIndex(code_blocks_by_task)
         self._build_positions()
 
     @classmethod
@@ -70,6 +76,12 @@ class ContextGraphIndex:
         enable_typed_dependency = getattr(
             args, "ucm_graph_enable_typed_dependency_edges", False
         )
+        enable_unified_context = getattr(
+            args, "ucm_graph_enable_unified_context_edges", False
+        )
+        enable_multi_evidence = getattr(
+            args, "ucm_graph_enable_multi_evidence", False
+        )
         query_identifiers = set(_extract_identifiers(getattr(example, "left_context", "")))
         query_import_tokens = _extract_import_tokens(getattr(example, "left_context", ""))
         query_api_tokens = _extract_api_call_tokens(getattr(example, "left_context", ""))
@@ -81,22 +93,65 @@ class ContextGraphIndex:
         proposals = {}
         proposed_counts = Counter()
         source_counts = Counter()
+        query_graph_facts = {}
 
         def add_proposals(neighbors, seed_rank, seed_weight):
             for edge in neighbors:
                 neighbor, source, edge_score, edge_distance = edge[:4]
                 metadata = edge[4] if len(edge) > 4 else {}
                 key = block_key(neighbor)
-                is_typed = source.startswith("graph_typed_")
-                if key in seen and not is_typed:
+                is_semantic = source.startswith("graph_typed_") or source == "graph_unified"
+                if key in seen and not (is_semantic or enable_multi_evidence):
                     continue
                 proposed_counts[source] += 1
                 score = seed_weight * edge_score
                 prev = proposals.get(key)
+                if enable_multi_evidence:
+                    scaled_metadata = _metadata_with_scaled_evidence(
+                        metadata,
+                        source,
+                        score,
+                        edge_distance,
+                    )
+                    if prev is None:
+                        proposals[key] = {
+                            "block": neighbor,
+                            "source": source,
+                            "sources": {source},
+                            "score": aggregate_evidence_score(
+                                scaled_metadata["evidence"]
+                            ),
+                            "seed_rank": seed_rank,
+                            "edge_distance": edge_distance,
+                            "metadata": scaled_metadata,
+                            "existing_candidate": key in seen,
+                        }
+                    else:
+                        merged_evidence = merge_evidence(
+                            prev.get("metadata", {}).get("evidence", ()),
+                            scaled_metadata.get("evidence", ()),
+                            max_items=max(
+                                1,
+                                getattr(
+                                    args,
+                                    "ucm_graph_max_evidence_per_candidate",
+                                    12,
+                                ),
+                            ),
+                        )
+                        prev["metadata"] = _metadata_from_evidence(merged_evidence)
+                        prev["score"] = aggregate_evidence_score(merged_evidence)
+                        prev.setdefault("sources", {prev["source"]}).add(source)
+                        prev["seed_rank"] = min(prev["seed_rank"], seed_rank)
+                        prev["edge_distance"] = min(
+                            prev["edge_distance"], edge_distance
+                        )
+                    continue
                 if prev is None or score > prev["score"]:
                     proposals[key] = {
                         "block": neighbor,
                         "source": source,
+                        "sources": {source},
                         "score": score,
                         "seed_rank": seed_rank,
                         "edge_distance": edge_distance,
@@ -119,6 +174,24 @@ class ContextGraphIndex:
                 origin="query",
             )
             add_proposals(query_neighbors, -1, 1.0)
+
+        if enable_unified_context:
+            unified_query_lines = max(
+                1, getattr(args, "ucm_graph_unified_query_context_lines", 160)
+            )
+            unified_query_text = "\n".join(
+                getattr(example, "left_context", "").splitlines()[
+                    -unified_query_lines:
+                ]
+            )
+            unified_neighbors, query_graph_facts = self._unified_context_neighbors(
+                example,
+                unified_query_text,
+                max(0, getattr(args, "ucm_graph_unified_query_max", 16)),
+                args,
+                origin="query",
+            )
+            add_proposals(unified_neighbors, -1, 1.0)
 
         for seed_rank, seed in enumerate(seed_blocks[:max_seed]):
             if _is_stop_block(seed):
@@ -176,6 +249,16 @@ class ContextGraphIndex:
                         seed=seed,
                     )
                 )
+            if enable_unified_context:
+                unified_neighbors, _ = self._unified_context_neighbors(
+                    example,
+                    getattr(seed, "code_content", ""),
+                    max_neighbors,
+                    args,
+                    origin="seed",
+                    seed=seed,
+                )
+                neighbors.extend(unified_neighbors)
 
             seed_weight = _seed_rank_weight(seed_rank, args)
             add_proposals(neighbors, seed_rank, seed_weight)
@@ -195,6 +278,10 @@ class ContextGraphIndex:
         relation_counts = Counter()
         origin_counts = Counter()
         matched_symbols = Counter()
+        unified_relation_counts = Counter()
+        unified_origin_counts = Counter()
+        unified_path_count = 0
+        multi_evidence_candidates = 0
         annotated_existing = 0
         for item in ranked[:max_total]:
             metadata = item.get("metadata", {})
@@ -206,6 +293,7 @@ class ContextGraphIndex:
                     item["score"],
                     item["edge_distance"],
                     metadata,
+                    item.get("sources"),
                 )
             )
             source_counts[item["source"]] += 1
@@ -213,12 +301,21 @@ class ContextGraphIndex:
             if item.get("existing_candidate"):
                 annotated_existing += 1
             relation = metadata.get("relation")
-            if relation:
+            if relation and relation.startswith("graph_typed_"):
                 relation_counts[relation] += 1
-            origin = metadata.get("origin")
-            if origin:
-                origin_counts[origin] += 1
-            matched_symbols.update(metadata.get("matched_symbols", ()))
+                origin = metadata.get("origin")
+                if origin:
+                    origin_counts[origin] += 1
+                matched_symbols.update(metadata.get("matched_symbols", ()))
+            evidence = metadata.get("evidence", ())
+            unified_path_count += len(evidence)
+            if len(evidence) > 1:
+                multi_evidence_candidates += 1
+            for path_evidence in evidence:
+                unified_relation_counts[
+                    path_evidence.get("relation", "unknown")
+                ] += 1
+                unified_origin_counts[path_evidence.get("origin", "unknown")] += 1
 
         trace = {
             "graph_expanded": len(selected),
@@ -235,17 +332,106 @@ class ContextGraphIndex:
             "graph_identifier_query_only": identifier_query_only,
             "graph_api_call_query_only": api_call_query_only,
             "graph_typed_dependency_enabled": enable_typed_dependency,
+            "graph_unified_context_enabled": enable_unified_context,
+            "graph_multi_evidence_enabled": enable_multi_evidence,
             "graph_typed_relation_mode": getattr(
                 args, "ucm_graph_typed_relation_mode", "all"
             ),
             "graph_typed_relations": dict(relation_counts),
             "graph_typed_origins": dict(origin_counts),
             "graph_typed_matched_symbols": dict(matched_symbols),
+            "graph_unified_query_facts": query_graph_facts,
+            "graph_unified_relations": dict(unified_relation_counts),
+            "graph_unified_origins": dict(unified_origin_counts),
+            "graph_unified_path_count": unified_path_count,
+            "graph_unified_multi_evidence_candidates": multi_evidence_candidates,
             "graph_score_min": round(min(scores), 6) if scores else None,
             "graph_score_max": round(max(scores), 6) if scores else None,
             "graph_score_avg": round(sum(scores) / len(scores), 6) if scores else None,
         }
         return selected, trace
+
+    def _unified_context_neighbors(
+        self,
+        example,
+        source_text,
+        max_results,
+        args,
+        origin,
+        seed=None,
+    ):
+        weights = {
+            "unified_receiver_member": getattr(
+                args, "ucm_graph_unified_receiver_weight", 3.2
+            ),
+            "unified_override": getattr(
+                args, "ucm_graph_unified_override_weight", 2.9
+            ),
+            "unified_member_of": getattr(
+                args, "ucm_graph_unified_member_weight", 2.6
+            ),
+            "unified_import_resolution": getattr(
+                args, "ucm_graph_unified_import_weight", 2.5
+            ),
+            "unified_inheritance": getattr(
+                args, "ucm_graph_unified_inheritance_weight", 2.3
+            ),
+            "unified_type_definition": getattr(
+                args, "ucm_graph_typed_type_weight", 2.0
+            ),
+            "unified_call_definition": getattr(
+                args, "ucm_graph_typed_call_weight", 1.8
+            ),
+            "unified_signature_type": getattr(
+                args, "ucm_graph_unified_signature_weight", 1.7
+            ),
+            "unified_def_use": getattr(
+                args, "ucm_graph_typed_def_use_weight", 1.4
+            ),
+            "unified_control_dependency": getattr(
+                args, "ucm_graph_unified_control_weight", 0.8
+            ),
+        }
+        exclude_file_path = ""
+        if not getattr(args, "ucm_graph_typed_allow_target_file", False):
+            exclude_file_path = getattr(example, "file_path", "")
+        matches, query_facts = self.unified_context_index.neighbors(
+            example.task_id,
+            source_text,
+            getattr(example, "language", ""),
+            max_results=max_results,
+            max_df=max(1, getattr(args, "ucm_graph_unified_max_df", 12)),
+            weights=weights,
+            origin=origin,
+            exclude_block_key=block_key(seed) if seed is not None else None,
+            exclude_file_path=exclude_file_path,
+            max_evidence_per_candidate=max(
+                1, getattr(args, "ucm_graph_max_evidence_per_candidate", 12)
+            ),
+        )
+        neighbors = []
+        for match in matches:
+            evidence = match["evidence"]
+            dominant = evidence[0] if evidence else {}
+            neighbors.append(
+                (
+                    match["block"],
+                    "graph_unified",
+                    match["score"],
+                    min(
+                        (item.get("path_length", 1) for item in evidence),
+                        default=1,
+                    ),
+                    {
+                        "relation": dominant.get("relation"),
+                        "relations": match["relations"],
+                        "matched_symbols": match["symbols"],
+                        "origin": dominant.get("origin", origin),
+                        "evidence": evidence,
+                    },
+                )
+            )
+        return neighbors, query_facts
 
     def _typed_dependency_neighbors(
         self,
@@ -563,8 +749,8 @@ def _append_deduped(candidates, expanded):
     for block in expanded:
         key = block_key(block)
         if key in by_key:
-            if getattr(block, "_type", "").startswith("graph_typed_"):
-                _merge_typed_graph_metadata(by_key[key], block)
+            if _has_semantic_graph_metadata(block):
+                _merge_semantic_graph_metadata(by_key[key], block)
             continue
         by_key[key] = block
         merged.append(block)
@@ -578,10 +764,11 @@ def _copy_graph_block(
     score=None,
     edge_distance=None,
     metadata=None,
+    sources=None,
 ):
     copied = copy.copy(block)
     copied._type = source
-    copied._ucm_sources = (source,)
+    copied._ucm_sources = tuple(sorted(sources or (source,)))
     copied._ucm_graph_seed_rank = seed_rank
     copied._ucm_graph_score = score
     copied._ucm_graph_edge_distance = edge_distance
@@ -591,14 +778,58 @@ def _copy_graph_block(
         metadata.get("matched_symbols", ())
     )
     copied._ucm_graph_origin = metadata.get("origin")
+    copied._ucm_graph_relations = tuple(metadata.get("relations", ()))
+    copied._ucm_graph_evidence = tuple(metadata.get("evidence", ()))
     return copied
 
 
-def _merge_typed_graph_metadata(target, source):
+def _merge_semantic_graph_metadata(target, source):
     existing_sources = tuple(getattr(target, "_ucm_sources", ()))
-    typed_source = getattr(source, "_type", "")
-    if typed_source and typed_source not in existing_sources:
-        target._ucm_sources = existing_sources + (typed_source,)
+    semantic_sources = tuple(getattr(source, "_ucm_sources", ())) or (
+        getattr(source, "_type", ""),
+    )
+    target._ucm_sources = existing_sources + tuple(
+        item for item in semantic_sources if item and item not in existing_sources
+    )
+
+    merged_evidence = merge_evidence(
+        getattr(target, "_ucm_graph_evidence", ()),
+        getattr(source, "_ucm_graph_evidence", ()),
+        max_items=12,
+    )
+    if merged_evidence:
+        target._ucm_graph_evidence = tuple(merged_evidence)
+        target._ucm_graph_score = aggregate_evidence_score(merged_evidence)
+        dominant = merged_evidence[0]
+        target._ucm_graph_relation = dominant.get("relation")
+        target._ucm_graph_relations = tuple(
+            sorted(
+                {
+                    item.get("relation")
+                    for item in merged_evidence
+                    if item.get("relation")
+                }
+            )
+        )
+        target._ucm_graph_matched_symbols = tuple(
+            sorted(
+                {
+                    symbol
+                    for item in merged_evidence
+                    for symbol in item.get("symbols", ())
+                }
+            )
+        )
+        target._ucm_graph_origin = dominant.get("origin")
+        target._ucm_graph_seed_rank = min(
+            getattr(target, "_ucm_graph_seed_rank", 10**9),
+            getattr(source, "_ucm_graph_seed_rank", 10**9),
+        )
+        target._ucm_graph_edge_distance = min(
+            getattr(target, "_ucm_graph_edge_distance", 10**9),
+            getattr(source, "_ucm_graph_edge_distance", 10**9),
+        )
+        return
 
     existing_score = getattr(target, "_ucm_graph_score", None)
     source_score = getattr(source, "_ucm_graph_score", None)
@@ -614,6 +845,72 @@ def _merge_typed_graph_metadata(target, source):
         "_ucm_graph_origin",
     ):
         setattr(target, attr, getattr(source, attr, None))
+
+
+def _has_semantic_graph_metadata(block):
+    block_type = getattr(block, "_type", "")
+    return bool(
+        block_type.startswith("graph_typed_")
+        or block_type == "graph_unified"
+        or getattr(block, "_ucm_graph_evidence", ())
+    )
+
+
+def _metadata_with_scaled_evidence(metadata, source, score, edge_distance):
+    metadata = dict(metadata or {})
+    source_evidence = metadata.get("evidence", ())
+    evidence = []
+    if source_evidence:
+        source_score = aggregate_evidence_score(source_evidence)
+        scale = score / max(source_score, 1e-6)
+        for item in source_evidence:
+            scaled = dict(item)
+            scaled["confidence"] = round(
+                max(0.0, float(item.get("confidence", 0.0)) * scale), 6
+            )
+            evidence.append(scaled)
+    else:
+        relation = metadata.get("relation") or source
+        evidence.append(
+            {
+                "relation": relation,
+                "origin": metadata.get("origin", "seed"),
+                "symbols": tuple(metadata.get("matched_symbols", ())),
+                "path": (metadata.get("origin", "seed"), relation, "block"),
+                "confidence": round(max(0.0, float(score)), 6),
+                "path_length": edge_distance,
+                "ambiguity": 1,
+            }
+        )
+    return _metadata_from_evidence(evidence)
+
+
+def _metadata_from_evidence(evidence):
+    evidence = merge_evidence(evidence, (), max_items=12)
+    dominant = evidence[0] if evidence else {}
+    return {
+        "relation": dominant.get("relation"),
+        "relations": tuple(
+            sorted(
+                {
+                    item.get("relation")
+                    for item in evidence
+                    if item.get("relation")
+                }
+            )
+        ),
+        "matched_symbols": tuple(
+            sorted(
+                {
+                    symbol
+                    for item in evidence
+                    for symbol in item.get("symbols", ())
+                }
+            )
+        ),
+        "origin": dominant.get("origin"),
+        "evidence": evidence,
+    }
 
 
 def _seed_rank_weight(seed_rank, args):
@@ -656,10 +953,11 @@ def _graph_source_priority(source):
         "graph_typed_type": 0,
         "graph_typed_call": 1,
         "graph_typed_def_use": 2,
-        "graph_api_call": 3,
-        "graph_import_path": 4,
-        "graph_identifier": 5,
-        "graph_same_file": 6,
+        "graph_unified": 3,
+        "graph_api_call": 4,
+        "graph_import_path": 5,
+        "graph_identifier": 6,
+        "graph_same_file": 7,
     }.get(source, 99)
 
 
